@@ -35,15 +35,27 @@ import {
   ArrowLeft,
   Flame,
   Hourglass,
+  MapPin,
 } from 'lucide-react';
 import { TacticalAudioEngine, MusicTrackId } from './soundEngine';
 import {
   WEAPON_CATALOG,
   WeaponSpec,
+  WeaponShopTab,
   STANDALONE_HTML_SOURCE,
 } from './standaloneHtmlGenerator';
 import { MenuBackground } from './components/MenuBackground';
 import { createTeamCharacterModel } from './characterModels';
+import { buildFirstPersonWeaponViewmodel } from './weaponModels';
+import {
+  MapId,
+  MAP_CATALOG,
+  AABBCollider,
+  ElevationZone,
+  BuiltArenaMap,
+  buildArenaMapById,
+  getGroundElevationAt,
+} from './mapModels';
 
 type TeamSide = 'CT' | 'TR';
 
@@ -63,6 +75,7 @@ interface WeaponAmmoState {
 }
 
 interface HudState {
+  activeMapId: MapId;
   playerTeam: TeamSide;
   isPlayerDead: boolean;
   spectatingAllyName: string | null;
@@ -90,15 +103,6 @@ interface HudState {
   bannerText: string;
 }
 
-interface AABBCollider {
-  minX: number;
-  maxX: number;
-  minY: number;
-  maxY: number;
-  minZ: number;
-  maxZ: number;
-}
-
 interface BotEntity {
   id: number;
   name: string;
@@ -116,6 +120,7 @@ interface BotEntity {
   baseBodyColor: number;
   baseHeadColor: number;
   muzzleFlash: THREE.Mesh;
+  weaponLabel: string;
   hp: number;
   maxHp: number;
   speed: number;
@@ -143,20 +148,6 @@ interface BulletTracer {
   maxLife: number;
 }
 
-// Waypoints táticos da Arena Dust II (Corredor Esquerdo, Meio, Portão Norte, Corredor Direito)
-const ARENA_WAYPOINTS: [number, number][] = [
-  [0.5, -18.5], // Entrada Norte do Portão
-  [0.5, -10.5], // Saída Sul do Portão do Meio
-  [-15.5, -15.0], // Flanco Noroeste (Longo Esquerdo)
-  [-15.5, 0.0], // Corredor Longo Esquerdo Central
-  [-14.5, 13.5], // Saída Sudoeste (Base CT)
-  [15.5, -15.0], // Flanco Nordeste (Corredor Direito)
-  [15.5, 0.0], // Corredor Direito Central
-  [14.5, 13.5], // Saída Sudeste (Base CT)
-  [-4.5, 4.5], // Praça Central Oeste
-  [4.5, -4.5], // Praça Central Leste
-  [0.0, 11.0], // Rampa Sul CT
-];
 
 // Ângulos dos sensores de desvio (Whiskers) para contornar paredes e caixas suavemente
 const STEER_ANGLES = [0, 0.42, -0.42, 0.85, -0.85, 1.3, -1.3, 1.75, -1.75];
@@ -206,7 +197,8 @@ export default function App() {
   const audioRef = useRef<TacticalAudioEngine>(new TacticalAudioEngine());
 
   const [gameMode, setGameMode] = useState<'title' | 'playing' | 'paused'>('title');
-  const [menuTab, setMenuTab] = useState<'main' | 'team' | 'arsenal' | 'controls'>('main');
+  const [menuTab, setMenuTab] = useState<'main' | 'maps' | 'team' | 'arsenal' | 'controls'>('main');
+  const [shopTab, setShopTab] = useState<WeaponShopTab>('rifles');
   const [bgStyle, setBgStyle] = useState<'dust2' | 'sandstorm' | 'tactical_night'>('dust2');
   const [isBuyOpen, setIsBuyOpen] = useState(false);
   const [isCodeModalOpen, setIsCodeModalOpen] = useState(false);
@@ -219,6 +211,7 @@ export default function App() {
   const [killfeed, setKillfeed] = useState<KillfeedEntry[]>([]);
 
   const [hud, setHud] = useState<HudState>({
+    activeMapId: 'complexo',
     playerTeam: 'CT',
     isPlayerDead: false,
     spectatingAllyName: null,
@@ -253,6 +246,7 @@ export default function App() {
     isCodeOpen: boolean;
     gameMode: 'title' | 'playing' | 'paused';
     requestLock: () => void;
+    selectMap: (mapId: MapId, startImmediately?: boolean) => void;
     selectTeamAndStart: (team: TeamSide) => void;
     takeoverAlliedBot: () => void;
     buyItem: (itemKey: string, targetSlot?: 1 | 2) => void;
@@ -266,6 +260,7 @@ export default function App() {
     isCodeOpen: false,
     gameMode: 'title',
     requestLock: () => {},
+    selectMap: () => {},
     selectTeamAndStart: () => {},
     takeoverAlliedBot: () => {},
     buyItem: () => {},
@@ -344,12 +339,17 @@ export default function App() {
     let camera: THREE.PerspectiveCamera;
     let renderer: THREE.WebGLRenderer;
     let clock: THREE.Clock;
+    let hemiLight: THREE.HemisphereLight;
+    let sunLight: THREE.DirectionalLight;
+    let currentBuiltMap: BuiltArenaMap | null = null;
     let weaponGroup: THREE.Group;
     let muzzleFlashMesh: THREE.Mesh | null = null;
     let frameId = 0;
 
     const colliders: AABBCollider[] = [];
+    const elevationZones: ElevationZone[] = [];
     const shootableMeshes: THREE.Mesh[] = [];
+    let activeWaypoints: [number, number, number][] = [];
     const bots: BotEntity[] = [];
     const decals: THREE.Mesh[] = [];
     const sparks: SparkParticle[] = [];
@@ -364,9 +364,10 @@ export default function App() {
 
     // Estado interno do jogador e da partida 5v5 (5 minutos = 300 segundos por round)
     const player = {
+      mapId: 'complexo' as MapId,
       team: 'CT' as TeamSide,
       isDead: false,
-      pos: new THREE.Vector3(0, 1.72, 22),
+      pos: new THREE.Vector3(0, 1.72, 24.5),
       vel: new THREE.Vector3(0, 0, 0),
       yaw: 0,
       pitch: 0,
@@ -387,20 +388,18 @@ export default function App() {
       trScore: 0,
       loadout: ['knife', 'ak47', 'awp'] as string[],
       activeSlotIndex: 0, // Começa com a Faca Tática na mão
-      ammoMap: {
-        knife: { clip: 1, reserve: 1 },
-        usp: { clip: 12, reserve: 48 },
-        deagle: { clip: 7, reserve: 35 },
-        m3: { clip: 8, reserve: 32 },
-        mp5: { clip: 30, reserve: 120 },
-        ak47: { clip: 30, reserve: 90 },
-        m4a1: { clip: 30, reserve: 90 },
-        awp: { clip: 10, reserve: 30 },
-      } as Record<string, WeaponAmmoState>,
+      ammoMap: Object.keys(WEAPON_CATALOG).reduce((acc, k) => {
+        acc[k] = {
+          clip: WEAPON_CATALOG[k].clipSize,
+          reserve: WEAPON_CATALOG[k].reserveMax,
+        };
+        return acc;
+      }, {} as Record<string, WeaponAmmoState>),
       zoomLevel: 0,
       targetFov: 75,
       isReloading: false,
       reloadTimer: 0,
+      inspectTimer: 0,
       lastShotTime: 0,
       bobPhase: 0,
       recoilOffset: 0,
@@ -438,6 +437,7 @@ export default function App() {
       const { ct, tr } = getTeamAliveCounts();
       const ally = player.isDead ? getFirstLivingAllyBot() : null;
       setHud({
+        activeMapId: player.mapId,
         playerTeam: player.team,
         isPlayerDead: player.isDead,
         spectatingAllyName: ally ? ally.name : null,
@@ -492,593 +492,58 @@ export default function App() {
       setKillfeed((prev) => [entry, ...prev.slice(0, 5)]);
     };
 
-    const createProceduralTexture = (
-      type: 'sand' | 'sandstone' | 'crate' | 'brick',
-      maxAniso: number
-    ): THREE.CanvasTexture => {
-      const canvas = document.createElement('canvas');
-      canvas.width = 256;
-      canvas.height = 256;
-      const ctx = canvas.getContext('2d')!;
+    // Carrega ou troca o mapa 3D ativo sob demanda, liberando VRAM do mapa anterior
+    const loadArenaMap = (mapId: MapId) => {
+      for (let i = decals.length - 1; i >= 0; i--) {
+        scene.remove(decals[i]);
+        decals[i].geometry.dispose();
+      }
+      decals.length = 0;
 
-      if (type === 'sand') {
-        ctx.fillStyle = '#e3c18f';
-        ctx.fillRect(0, 0, 256, 256);
-        for (let i = 0; i < 1800; i++) {
-          ctx.fillStyle = i % 2 === 0 ? '#d2ad79' : '#eed0a1';
-          ctx.globalAlpha = Math.random() * 0.28;
-          ctx.fillRect(Math.random() * 256, Math.random() * 256, 3, 3);
-        }
-      } else if (type === 'sandstone' || type === 'brick') {
-        ctx.fillStyle = type === 'sandstone' ? '#cfa977' : '#965238';
-        ctx.fillRect(0, 0, 256, 256);
-        for (let i = 0; i < 1200; i++) {
-          ctx.fillStyle = type === 'sandstone' ? '#a67f4e' : '#6e3722';
-          ctx.globalAlpha = Math.random() * 0.25;
-          ctx.fillRect(Math.random() * 256, Math.random() * 256, 4, 4);
-        }
-        ctx.globalAlpha = 0.42;
-        ctx.strokeStyle = '#4a3520';
-        ctx.lineWidth = 3;
-        const rowH = 32;
-        for (let y = 0; y < 256; y += rowH) {
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(256, y);
-          ctx.stroke();
-          const offset = (y / rowH) % 2 === 0 ? 0 : 32;
-          for (let x = offset; x < 256; x += 64) {
-            ctx.beginPath();
-            ctx.moveTo(x, y);
-            ctx.lineTo(x, y + rowH);
-            ctx.stroke();
-          }
-        }
-      } else if (type === 'crate') {
-        ctx.fillStyle = '#a46b39';
-        ctx.fillRect(0, 0, 256, 256);
-        ctx.strokeStyle = '#5c3818';
-        ctx.lineWidth = 4;
-        for (let y = 32; y < 256; y += 32) {
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(256, y);
-          ctx.stroke();
-        }
-        ctx.lineWidth = 14;
-        ctx.strokeRect(7, 7, 242, 242);
-        ctx.beginPath();
-        ctx.moveTo(12, 12);
-        ctx.lineTo(244, 244);
-        ctx.stroke();
+      if (currentBuiltMap) {
+        scene.remove(currentBuiltMap.mapGroup);
+        currentBuiltMap.dispose();
+        currentBuiltMap = null;
       }
 
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.wrapS = THREE.RepeatWrapping;
-      tex.wrapT = THREE.RepeatWrapping;
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.anisotropy = maxAniso;
-      return tex;
+      colliders.length = 0;
+      elevationZones.length = 0;
+      shootableMeshes.length = 0;
+
+      const maxAniso = renderer ? renderer.capabilities.getMaxAnisotropy() : 4;
+      const built = buildArenaMapById(mapId, maxAniso, isSoftwareGl);
+      currentBuiltMap = built;
+      player.mapId = mapId;
+
+      scene.add(built.mapGroup);
+      colliders.push(...built.colliders);
+      elevationZones.push(...built.elevationZones);
+      shootableMeshes.push(...built.shootableMeshes);
+      activeWaypoints = built.waypoints;
+
+      scene.background = new THREE.Color(built.skyColor);
+      scene.fog = new THREE.FogExp2(built.fogColor, built.fogDensity);
+
+      if (hemiLight) {
+        hemiLight.color.setHex(built.hemiSkyColor);
+        hemiLight.groundColor.setHex(built.hemiGroundColor);
+        hemiLight.intensity = built.hemiIntensity;
+      }
+      if (sunLight) {
+        sunLight.color.setHex(built.sunColor);
+        sunLight.intensity = built.sunIntensity;
+        sunLight.position.set(...built.sunPosition);
+      }
     };
 
-    const addArenaBlock = (
-      x: number,
-      y: number,
-      z: number,
-      w: number,
-      h: number,
-      d: number,
-      mat: THREE.Material
-    ) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-      mesh.position.set(x, y, z);
-      mesh.castShadow = !isSoftwareGl;
-      mesh.receiveShadow = !isSoftwareGl;
-      scene.add(mesh);
-      shootableMeshes.push(mesh);
-      colliders.push({
-        minX: x - w / 2,
-        maxX: x + w / 2,
-        minY: y - h / 2,
-        maxY: y + h / 2,
-        minZ: z - d / 2,
-        maxZ: z + d / 2,
-      });
-    };
-
-    const addCompositeCrate = (
-      x: number,
-      z: number,
-      size: number,
-      crateMat: THREE.Material,
-      trimMat: THREE.Material,
-      stackY = 0
-    ) => {
-      const group = new THREE.Group();
-      const yCenter = stackY + size / 2;
-      group.position.set(x, stackY, z);
-
-      const core = new THREE.Mesh(new THREE.BoxGeometry(size, size, size), crateMat);
-      core.position.y = size / 2;
-      core.castShadow = !isSoftwareGl;
-      core.receiveShadow = !isSoftwareGl;
-      group.add(core);
-      shootableMeshes.push(core);
-
-      const beamTop = new THREE.Mesh(
-        new THREE.BoxGeometry(size * 1.03, size * 0.1, size * 1.03),
-        trimMat
-      );
-      beamTop.position.y = size - size * 0.05;
-      const beamBot = new THREE.Mesh(
-        new THREE.BoxGeometry(size * 1.03, size * 0.1, size * 1.03),
-        trimMat
-      );
-      beamBot.position.y = size * 0.05;
-      group.add(beamTop, beamBot);
-
-      scene.add(group);
-      colliders.push({
-        minX: x - size / 2,
-        maxX: x + size / 2,
-        minY: yCenter - size / 2,
-        maxY: yCenter + size / 2,
-        minZ: z - size / 2,
-        maxZ: z + size / 2,
-      });
-    };
-
-    // Constrói APENAS UMA arma na mão com a cor da manga da facção do jogador (CT Azul ou TR Vermelho)
+    // Constrói APENAS UMA arma na mão usando o construtor 3D de alta definição (src/weaponModels.ts)
     const buildSingleWeaponViewmodel = (spec: WeaponSpec) => {
       if (weaponGroup) {
         camera.remove(weaponGroup);
       }
-      weaponGroup = new THREE.Group();
-      muzzleFlashMesh = null;
-
-      const sleeveMat = new THREE.MeshStandardMaterial({
-        color: player.team === 'CT' ? 0x1e3a8a : 0x7f1d1d,
-        roughness: 0.82,
-      });
-      const gloveMat = new THREE.MeshStandardMaterial({
-        color: 0x1c1f22,
-        roughness: 0.7,
-      });
-      const skinMat = new THREE.MeshStandardMaterial({
-        color: 0xd8a07a,
-        roughness: 0.65,
-      });
-
-      const rightArm = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.42), sleeveMat);
-      rightArm.position.set(0.24, -0.25, -0.28);
-      rightArm.rotation.y = 0.08;
-
-      const rightGlove = new THREE.Mesh(new THREE.BoxGeometry(0.088, 0.088, 0.13), gloveMat);
-      rightGlove.position.set(0.21, -0.22, -0.48);
-
-      const rightFingers = new THREE.Mesh(new THREE.BoxGeometry(0.076, 0.072, 0.07), skinMat);
-      rightFingers.position.set(0.21, -0.21, -0.54);
-
-      weaponGroup.add(rightArm, rightGlove, rightFingers);
-
-      if (spec.isMelee) {
-        const bladeSteelMat = new THREE.MeshStandardMaterial({
-          color: 0xe5e7eb,
-          roughness: 0.18,
-          metalness: 0.92,
-        });
-        const handleMat = new THREE.MeshStandardMaterial({
-          color: 0x1f2937,
-          roughness: 0.75,
-          metalness: 0.2,
-        });
-        const fullerMat = new THREE.MeshStandardMaterial({
-          color: 0x374151,
-          roughness: 0.4,
-          metalness: 0.8,
-        });
-
-        const grip = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.022, 0.026, 0.16, 10),
-          handleMat
-        );
-        grip.rotation.x = Math.PI / 2.3;
-        grip.position.set(0.21, -0.17, -0.51);
-
-        const pommel = new THREE.Mesh(new THREE.TorusGeometry(0.024, 0.007, 8, 16), fullerMat);
-        pommel.position.set(0.21, -0.22, -0.44);
-
-        const crossGuard = new THREE.Mesh(
-          new THREE.BoxGeometry(0.08, 0.025, 0.028),
-          fullerMat
-        );
-        crossGuard.position.set(0.21, -0.13, -0.57);
-
-        const bladeMain = new THREE.Mesh(
-          new THREE.BoxGeometry(0.012, 0.048, 0.28),
-          bladeSteelMat
-        );
-        bladeMain.position.set(0.21, -0.105, -0.71);
-        bladeMain.rotation.x = -0.12;
-
-        const bladeTip = new THREE.Mesh(
-          new THREE.ConeGeometry(0.026, 0.11, 4),
-          bladeSteelMat
-        );
-        bladeTip.rotation.x = -Math.PI / 2 - 0.12;
-        bladeTip.scale.set(0.35, 1, 1);
-        bladeTip.position.set(0.21, -0.09, -0.89);
-
-        const bloodGroove = new THREE.Mesh(
-          new THREE.BoxGeometry(0.015, 0.012, 0.2),
-          fullerMat
-        );
-        bloodGroove.position.set(0.21, -0.1, -0.69);
-        bloodGroove.rotation.x = -0.12;
-
-        weaponGroup.add(grip, pommel, crossGuard, bladeMain, bladeTip, bloodGroove);
-      } else if (spec.id === 'deagle' || spec.id === 'usp') {
-        // ====================================================================
-        // MODELO 3D REALISTA DE PISTOLA (DESERT EAGLE .50 CROMADA / USP .45)
-        // Sem coronha de rifle e sem pente externo longo: empunhadura real!
-        // ====================================================================
-        const isDeagle = spec.id === 'deagle';
-
-        // Braço e mão esquerda apoiando o punho da pistola (empunhadura dupla de pistola)
-        const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.42), sleeveMat);
-        leftArm.position.set(0.07, -0.26, -0.34);
-        leftArm.rotation.y = -0.38;
-
-        const leftGlove = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.082, 0.11), gloveMat);
-        leftGlove.position.set(0.185, -0.225, -0.49);
-
-        const leftFingers = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.068, 0.065), skinMat);
-        leftFingers.position.set(0.195, -0.215, -0.535);
-
-        // Material do Ferrolho (Cromado Prateado Espelhado na Desert Eagle .50)
-        const slideMat = new THREE.MeshStandardMaterial({
-          color: isDeagle ? 0xe2e8f0 : 0x2b3036,
-          roughness: isDeagle ? 0.15 : 0.38,
-          metalness: isDeagle ? 0.94 : 0.72,
-        });
-
-        // Material do Chassi/Punho Anatômico Preto
-        const gripMat = new THREE.MeshStandardMaterial({
-          color: 0x141417,
-          roughness: 0.78,
-          metalness: 0.18,
-        });
-
-        const darkMetalMat = new THREE.MeshStandardMaterial({
-          color: 0x090b0e,
-          roughness: 0.4,
-          metalness: 0.85,
-        });
-
-        const slideLen = isDeagle ? 0.34 : 0.25;
-        const slideHeight = isDeagle ? 0.068 : 0.052;
-        const slideWidth = isDeagle ? 0.054 : 0.044;
-
-        // Punho Anatômico Inclinado (onde o pente fica embutido)
-        const pistolGrip = new THREE.Mesh(
-          new THREE.BoxGeometry(slideWidth * 0.86, 0.165, 0.078),
-          gripMat
-        );
-        pistolGrip.position.set(0.21, -0.215, -0.47);
-        pistolGrip.rotation.x = -0.28;
-
-        // Placas laterais texturizadas do punho
-        const gripPanel = new THREE.Mesh(
-          new THREE.BoxGeometry(slideWidth * 0.92, 0.125, 0.056),
-          darkMetalMat
-        );
-        gripPanel.position.set(0.21, -0.215, -0.47);
-        gripPanel.rotation.x = -0.28;
-
-        // Base do carregador embutido no fundo do punho (Floorplate)
-        const magBase = new THREE.Mesh(
-          new THREE.BoxGeometry(slideWidth * 0.9, 0.018, 0.086),
-          slideMat
-        );
-        magBase.position.set(0.21, -0.295, -0.448);
-        magBase.rotation.x = -0.28;
-
-        // Chassi inferior (Frame) e Trilho Tático
-        const lowerFrame = new THREE.Mesh(
-          new THREE.BoxGeometry(slideWidth * 0.92, 0.032, slideLen * 0.88),
-          isDeagle ? slideMat : gripMat
-        );
-        lowerFrame.position.set(0.21, -0.138, -0.46 - slideLen * 0.38);
-
-        // Guarda-Mato (Trigger Guard) e Gatilho
-        const triggerGuardBottom = new THREE.Mesh(
-          new THREE.BoxGeometry(0.018, 0.01, 0.068),
-          gripMat
-        );
-        triggerGuardBottom.position.set(0.21, -0.178, -0.535);
-
-        const triggerGuardFront = new THREE.Mesh(
-          new THREE.BoxGeometry(0.018, 0.036, 0.012),
-          gripMat
-        );
-        triggerGuardFront.position.set(0.21, -0.16, -0.565);
-
-        const trigger = new THREE.Mesh(
-          new THREE.BoxGeometry(0.012, 0.028, 0.014),
-          darkMetalMat
-        );
-        trigger.position.set(0.21, -0.156, -0.53);
-        trigger.rotation.x = 0.35;
-
-        // Ferrolho Principal (Slide)
-        const slideBody = new THREE.Mesh(
-          new THREE.BoxGeometry(slideWidth, slideHeight, slideLen),
-          slideMat
-        );
-        slideBody.position.set(0.21, -0.1, -0.45 - slideLen * 0.42);
-
-        // Topo Chanfrado Triangular Característico da Desert Eagle .50
-        const slideTopRidge = new THREE.Mesh(
-          new THREE.BoxGeometry(slideWidth * 0.68, 0.018, slideLen * 0.96),
-          slideMat
-        );
-        slideTopRidge.position.set(0.21, -0.1 + slideHeight * 0.52, -0.45 - slideLen * 0.42);
-
-        // Janela de Ejeção Lateral Escura
-        const ejectionPort = new THREE.Mesh(
-          new THREE.BoxGeometry(slideWidth + 0.003, slideHeight * 0.48, 0.068),
-          darkMetalMat
-        );
-        ejectionPort.position.set(0.21, -0.092, -0.53);
-
-        // Boca do Cano Calibre .50 AE (Furo Escuro Realista na Frente)
-        const muzzleBore = new THREE.Mesh(
-          new THREE.CylinderGeometry(isDeagle ? 0.016 : 0.011, isDeagle ? 0.016 : 0.011, 0.02, 12),
-          darkMetalMat
-        );
-        muzzleBore.rotation.x = Math.PI / 2;
-        muzzleBore.position.set(0.21, -0.098, -0.45 - slideLen * 0.92);
-
-        // Cão Traseiro (Hammer)
-        const hammer = new THREE.Mesh(
-          new THREE.BoxGeometry(0.014, 0.032, 0.024),
-          darkMetalMat
-        );
-        hammer.position.set(0.21, -0.082, -0.435);
-        hammer.rotation.x = -0.45;
-
-        // Alça de Mira Traseira e Massa de Mira Frontal
-        const rearSight = new THREE.Mesh(
-          new THREE.BoxGeometry(slideWidth * 0.85, 0.018, 0.018),
-          darkMetalMat
-        );
-        rearSight.position.set(0.21, -0.1 + slideHeight * 0.68, -0.46);
-
-        const frontSight = new THREE.Mesh(
-          new THREE.BoxGeometry(0.012, 0.022, 0.018),
-          darkMetalMat
-        );
-        frontSight.position.set(0.21, -0.1 + slideHeight * 0.68, -0.45 - slideLen * 0.86);
-
-        weaponGroup.add(
-          leftArm,
-          leftGlove,
-          leftFingers,
-          pistolGrip,
-          gripPanel,
-          magBase,
-          lowerFrame,
-          triggerGuardBottom,
-          triggerGuardFront,
-          trigger,
-          slideBody,
-          slideTopRidge,
-          ejectionPort,
-          muzzleBore,
-          hammer,
-          rearSight,
-          frontSight
-        );
-
-        muzzleFlashMesh = new THREE.Mesh(
-          new THREE.ConeGeometry(isDeagle ? 0.11 : 0.075, isDeagle ? 0.26 : 0.18, 6),
-          new THREE.MeshBasicMaterial({ color: 0xfde047 })
-        );
-        muzzleFlashMesh.rotation.x = -Math.PI / 2;
-        muzzleFlashMesh.position.set(0.21, -0.098, -0.48 - slideLen);
-        muzzleFlashMesh.visible = false;
-        weaponGroup.add(muzzleFlashMesh);
-      } else if (spec.id === 'm3') {
-        // ====================================================================
-        // MODELO 3D DA SHOTGUN LEONE 12G SUPER (M3 PUMP-ACTION)
-        // Cano Calibre 12 + Tubo Carregador Inferior + Telha Pump Frisada
-        // ====================================================================
-        const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.095, 0.5), sleeveMat);
-        leftArm.position.set(0.04, -0.26, -0.48);
-        leftArm.rotation.y = -0.32;
-
-        const leftHand = new THREE.Mesh(new THREE.BoxGeometry(0.084, 0.082, 0.13), skinMat);
-        leftHand.position.set(0.18, -0.195, -0.78);
-
-        const metalMat = new THREE.MeshStandardMaterial({
-          color: 0x27272a,
-          roughness: 0.3,
-          metalness: 0.85,
-        });
-        const pumpWoodMat = new THREE.MeshStandardMaterial({
-          color: 0x5c3a21,
-          roughness: 0.68,
-          metalness: 0.15,
-        });
-        const darkBoreMat = new THREE.MeshStandardMaterial({
-          color: 0x090b0e,
-          roughness: 0.5,
-        });
-
-        // Caixa da Culatra (Receiver da Escopeta)
-        const receiver = new THREE.Mesh(
-          new THREE.BoxGeometry(0.074, 0.105, 0.38),
-          metalMat
-        );
-        receiver.position.set(0.21, -0.155, -0.48);
-
-        // Janela de ejeção de cartuchos 12G
-        const shellPort = new THREE.Mesh(
-          new THREE.BoxGeometry(0.077, 0.036, 0.095),
-          darkBoreMat
-        );
-        shellPort.position.set(0.21, -0.145, -0.52);
-
-        // Coronha Tática Traseira
-        const stock = new THREE.Mesh(
-          new THREE.BoxGeometry(0.062, 0.115, 0.28),
-          pumpWoodMat
-        );
-        stock.position.set(0.21, -0.19, -0.22);
-        stock.rotation.x = 0.12;
-
-        // Cano Principal Calibre 12 (Superior)
-        const barrel = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.019, 0.021, 0.68, 14),
-          metalMat
-        );
-        barrel.rotation.x = Math.PI / 2;
-        barrel.position.set(0.21, -0.122, -0.96);
-
-        // Tubo Carregador de Cartuchos (Inferior)
-        const tubeMag = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.017, 0.017, 0.62, 12),
-          metalMat
-        );
-        tubeMag.rotation.x = Math.PI / 2;
-        tubeMag.position.set(0.21, -0.162, -0.93);
-
-        // Telha Corrediça Pump-Action Frisada (Segurada pela mão esquerda)
-        const pumpForend = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.032, 0.032, 0.26, 14),
-          pumpWoodMat
-        );
-        pumpForend.rotation.x = Math.PI / 2;
-        pumpForend.position.set(0.21, -0.165, -0.82);
-
-        // Massa de mira frontal da Shotgun
-        const frontBead = new THREE.Mesh(
-          new THREE.SphereGeometry(0.008, 8, 8),
-          new THREE.MeshBasicMaterial({ color: 0xfbbf24 })
-        );
-        frontBead.position.set(0.21, -0.098, -1.27);
-
-        weaponGroup.add(
-          leftArm,
-          leftHand,
-          receiver,
-          shellPort,
-          stock,
-          barrel,
-          tubeMag,
-          pumpForend,
-          frontBead
-        );
-
-        muzzleFlashMesh = new THREE.Mesh(
-          new THREE.ConeGeometry(0.14, 0.32, 7),
-          new THREE.MeshBasicMaterial({ color: 0xfbbf24 })
-        );
-        muzzleFlashMesh.rotation.x = -Math.PI / 2;
-        muzzleFlashMesh.position.set(0.21, -0.122, -1.36);
-        muzzleFlashMesh.visible = false;
-        weaponGroup.add(muzzleFlashMesh);
-      } else {
-        const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.095, 0.48), sleeveMat);
-        leftArm.position.set(0.05, -0.27, -0.45);
-        leftArm.rotation.y = -0.34;
-
-        const len = spec.lengthScale;
-        const leftHand = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.12), skinMat);
-        leftHand.position.set(0.18, -0.21, -0.68 * len);
-
-        const bodyMat = new THREE.MeshStandardMaterial({
-          color: spec.bodyColor,
-          roughness: 0.35,
-          metalness: 0.78,
-        });
-        const accentMat = new THREE.MeshStandardMaterial({
-          color: spec.accentColor,
-          roughness: 0.68,
-          metalness: 0.25,
-        });
-
-        const receiver = new THREE.Mesh(
-          new THREE.BoxGeometry(0.072, 0.11, 0.44 * len),
-          bodyMat
-        );
-        receiver.position.set(0.21, -0.165, -0.52);
-
-        const handguard = new THREE.Mesh(
-          new THREE.BoxGeometry(0.064, 0.085, 0.28 * len),
-          accentMat
-        );
-        handguard.position.set(0.21, -0.165, -0.52 - 0.32 * len);
-
-        const stock = new THREE.Mesh(
-          new THREE.BoxGeometry(0.06, 0.105, 0.24 * len),
-          accentMat
-        );
-        stock.position.set(0.21, -0.19, -0.24);
-
-        const barrel = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.015, 0.017, 0.48 * len, 12),
-          bodyMat
-        );
-        barrel.rotation.x = Math.PI / 2;
-        barrel.position.set(0.21, -0.145, -0.52 - 0.48 * len);
-
-        const frontSight = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.045, 0.02), bodyMat);
-        frontSight.position.set(0.21, -0.115, -0.52 - 0.66 * len);
-
-        const magazine = new THREE.Mesh(
-          new THREE.BoxGeometry(0.046, 0.21, 0.085),
-          accentMat
-        );
-        magazine.position.set(0.21, -0.285, -0.58);
-        magazine.rotation.x = 0.24;
-
-        weaponGroup.add(
-          leftArm,
-          leftHand,
-          receiver,
-          handguard,
-          stock,
-          barrel,
-          frontSight,
-          magazine
-        );
-
-        if (spec.hasScope) {
-          const scopeMount = new THREE.Mesh(
-            new THREE.BoxGeometry(0.032, 0.04, 0.16),
-            accentMat
-          );
-          scopeMount.position.set(0.21, -0.095, -0.52);
-          const scopeTube = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.026, 0.028, 0.36, 14),
-            bodyMat
-          );
-          scopeTube.rotation.x = Math.PI / 2;
-          scopeTube.position.set(0.21, -0.075, -0.54);
-          weaponGroup.add(scopeMount, scopeTube);
-        }
-
-        muzzleFlashMesh = new THREE.Mesh(
-          new THREE.ConeGeometry(0.095, 0.24, 6),
-          new THREE.MeshBasicMaterial({ color: 0xfde047 })
-        );
-        muzzleFlashMesh.rotation.x = -Math.PI / 2;
-        muzzleFlashMesh.position.set(0.21, -0.145, -0.58 - 0.72 * len);
-        muzzleFlashMesh.visible = false;
-        weaponGroup.add(muzzleFlashMesh);
-      }
-
+      const built = buildFirstPersonWeaponViewmodel(spec, player.team);
+      weaponGroup = built.weaponGroup;
+      muzzleFlashMesh = built.muzzleFlashMesh;
       weaponGroup.visible = !player.isDead && player.zoomLevel === 0;
       camera.add(weaponGroup);
     };
@@ -1090,6 +555,7 @@ export default function App() {
         player.loadout.length;
       player.activeSlotIndex = normalized;
       player.isReloading = false;
+      player.inspectTimer = 0;
       player.zoomLevel = 0;
       player.targetFov = 75;
       player.equipAnimOffset = -0.22;
@@ -1107,6 +573,11 @@ export default function App() {
       bots.forEach((b) => scene.remove(b.group));
       bots.length = 0;
 
+      if (!currentBuiltMap) {
+        loadArenaMap(player.mapId);
+      }
+      const mapData = currentBuiltMap!;
+
       player.isDead = false;
       player.hp = 100;
       player.armor = 100;
@@ -1119,6 +590,8 @@ export default function App() {
       player.zoomLevel = 0;
       player.targetFov = 75;
       player.isReloading = false;
+      player.vel.set(0, 0, 0);
+      player.onGround = true;
 
       // Reabastece pentes no início do round
       Object.keys(WEAPON_CATALOG).forEach((k) => {
@@ -1128,35 +601,20 @@ export default function App() {
         };
       });
 
-      // Posiciona o jogador na base do seu time (CT = Sul +22, TR = Norte -22)
+      // Posiciona o jogador no ponto de spawn configurado do mapa ativo
       if (player.team === 'CT') {
-        player.pos.set(0, 1.72, 23);
-        player.yaw = 0;
+        player.pos.set(...mapData.playerCtSpawn.pos);
+        player.yaw = mapData.playerCtSpawn.yaw;
       } else {
-        player.pos.set(0, 1.72, -23);
-        player.yaw = Math.PI;
+        player.pos.set(...mapData.playerTrSpawn.pos);
+        player.yaw = mapData.playerTrSpawn.yaw;
       }
       player.pitch = 0;
-
-      const ctSpawnCoords: [number, number][] = [
-        [-10, 23],
-        [-5, 23],
-        [5, 23],
-        [10, 23],
-        [0, 20],
-      ];
-      const trSpawnCoords: [number, number][] = [
-        [-10, -23],
-        [-5, -23],
-        [5, -23],
-        [10, -23],
-        [0, -20],
-      ];
 
       const spawnSquad = (
         teamSide: TeamSide,
         botCount: number,
-        coords: [number, number][],
+        coords: [number, number, number][],
         names: string[]
       ) => {
         const isAllyToPlayer = teamSide === player.team;
@@ -1192,14 +650,21 @@ export default function App() {
 
           const sp = coords[i % coords.length];
           group.position.set(
-            sp[0] + (Math.random() - 0.5) * 1.6,
-            0,
-            sp[1] + (Math.random() - 0.5) * 1.6
+            sp[0] + (Math.random() - 0.5) * 1.4,
+            sp[1],
+            sp[2] + (Math.random() - 0.5) * 1.4
           );
           scene.add(group);
 
-          const initialWpIdx = Math.floor(Math.random() * ARENA_WAYPOINTS.length);
-          const wp = ARENA_WAYPOINTS[initialWpIdx];
+          const initialWpIdx = Math.floor(Math.random() * activeWaypoints.length);
+          const wp = activeWaypoints[initialWpIdx] || [0, 0, 0];
+
+          const pmWeapons = ['IMBEL IA2', 'ParaFAL 7.62', 'IMBEL IA2', 'CBC Pump 12G', 'IMBEL IA2', 'ParaFAL 7.62'];
+          const trWeapons = ['AK-47', 'HK G3 7.62', 'Doze Cano Curto', 'ParaFAL 7.62', 'AK-47', 'HK G3 7.62'];
+          const botWeaponLabel =
+            teamSide === 'CT'
+              ? pmWeapons[i % pmWeapons.length]
+              : trWeapons[i % trWeapons.length];
 
           const botEntity: BotEntity = {
             id: bots.length + 1,
@@ -1218,6 +683,7 @@ export default function App() {
             baseBodyColor,
             baseHeadColor,
             muzzleFlash,
+            weaponLabel: botWeaponLabel,
             hp: 100,
             maxHp: 100,
             speed: 4.6 + Math.random() * 0.85,
@@ -1230,7 +696,7 @@ export default function App() {
             walkCycle: Math.random() * Math.PI * 2,
             waypointIndex: initialWpIdx,
             waypointTimer: 3.5 + Math.random() * 2.5,
-            patrolGoal: new THREE.Vector3(wp[0], 0, wp[1]),
+            patrolGoal: new THREE.Vector3(wp[0], wp[1], wp[2]),
           };
 
           headMesh.userData = { bot: botEntity, isHead: true };
@@ -1242,8 +708,8 @@ export default function App() {
       };
 
       // Cria 4 bots na equipe do jogador (5 no total com o jogador) e 5 bots na equipe adversária
-      spawnSquad('CT', player.team === 'CT' ? 4 : 5, ctSpawnCoords, CT_BOT_NAMES);
-      spawnSquad('TR', player.team === 'TR' ? 4 : 5, trSpawnCoords, TR_BOT_NAMES);
+      spawnSquad('CT', player.team === 'CT' ? 4 : 5, mapData.ctSpawns, CT_BOT_NAMES);
+      spawnSquad('TR', player.team === 'TR' ? 4 : 5, mapData.trSpawns, TR_BOT_NAMES);
 
       buildSingleWeaponViewmodel(WEAPON_CATALOG[getActiveWeaponId()]);
       syncHud();
@@ -1312,7 +778,11 @@ export default function App() {
       player.isDead = false;
       player.hp = ally.hp;
       player.armor = Math.max(50, player.armor);
-      player.pos.set(ally.group.position.x, player.eyeHeight, ally.group.position.z);
+      player.pos.set(
+        ally.group.position.x,
+        ally.group.position.y + player.eyeHeight,
+        ally.group.position.z
+      );
       player.yaw = ally.group.rotation.y;
       player.pitch = 0;
 
@@ -1393,6 +863,7 @@ export default function App() {
       if (!st || st.clip >= spec.clipSize || st.reserve <= 0) return;
 
       player.isReloading = true;
+      player.inspectTimer = 0;
       player.reloadTimer = spec.reloadTimeMs / 1000;
 
       if (player.zoomLevel !== 0) {
@@ -1427,6 +898,7 @@ export default function App() {
       }
 
       player.lastShotTime = nowSec;
+      player.inspectTimer = 0;
       player.recoilOffset = spec.recoilKick;
       if (spec.isMelee) {
         player.knifeSwingOffset = isHeavyKnifeStab ? 1.35 : 0.9;
@@ -1556,8 +1028,8 @@ export default function App() {
 
               if (spec.isMelee) {
                 showBanner(`ABATE NA FACA! +$${bonus}`, 1.6);
-              } else if (spec.id === 'm3') {
-                showBanner(`ABATE DE SHOTGUN 12G! +$${bonus}`, 1.6);
+              } else if (spec.pellets) {
+                showBanner(`ABATE DE ESCOPETA 12G! +$${bonus}`, 1.6);
               } else if (isHeadshot) {
                 showBanner(`HEADSHOT! +$${bonus}`, 1.4);
               }
@@ -1687,13 +1159,32 @@ export default function App() {
       selectTeamAndStartMatch(player.team);
     };
 
+    const selectMapAndSetup = (chosenMapId: MapId, startImmediately = false) => {
+      loadArenaMap(chosenMapId);
+      player.round = 1;
+      player.ctScore = 0;
+      player.trScore = 0;
+      player.money = 1200;
+      startNew5v5Round();
+      const mapMeta = MAP_CATALOG[chosenMapId];
+      showBanner(`MAPA CARREGADO: ${mapMeta.name.toUpperCase()} (${mapMeta.subtitle})`, 2.5);
+      if (startImmediately) {
+        setIsBuyOpen(false);
+        setIsCodeModalOpen(false);
+        setGameMode('playing');
+        renderer.domElement.requestPointerLock?.();
+      } else {
+        syncHud();
+      }
+    };
+
     /* ==========================================================================
-       1. ARQUITETURA init() — Inicialização da Arena "Dust II"
+       1. ARQUITETURA init() — Inicialização da Cena e do Mapa Selecionado
        ========================================================================== */
     const init = () => {
       scene = new THREE.Scene();
-      scene.background = new THREE.Color(0xd9b98b);
-      scene.fog = new THREE.FogExp2(0xd9b98b, 0.014);
+      scene.background = new THREE.Color(0x7dd3fc);
+      scene.fog = new THREE.FogExp2(0xfde68a, 0.011);
 
       camera = new THREE.PerspectiveCamera(
         75,
@@ -1722,11 +1213,11 @@ export default function App() {
       scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
       pmremGenerator.dispose();
 
-      const hemiLight = new THREE.HemisphereLight(0xfff5db, 0x9c7a54, 0.85);
+      hemiLight = new THREE.HemisphereLight(0xe0f2fe, 0x9a6b43, 0.92);
       scene.add(hemiLight);
 
-      const sunLight = new THREE.DirectionalLight(0xfff1d0, 1.45);
-      sunLight.position.set(28, 46, 24);
+      sunLight = new THREE.DirectionalLight(0xffedd5, 1.55);
+      sunLight.position.set(32, 42, 26);
       sunLight.castShadow = !isSoftwareGl;
       sunLight.shadow.mapSize.set(1024, 1024);
       sunLight.shadow.camera.left = -38;
@@ -1736,81 +1227,7 @@ export default function App() {
       sunLight.shadow.bias = -0.0005;
       scene.add(sunLight);
 
-      const maxAniso = renderer.capabilities.getMaxAnisotropy();
-
-      const sandTex = createProceduralTexture('sand', maxAniso);
-      sandTex.repeat.set(22, 22);
-      const floorMat = new THREE.MeshStandardMaterial({
-        color: 0xe3c18f,
-        map: sandTex,
-        roughness: 0.92,
-        metalness: 0.02,
-      });
-      const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(72, 72), floorMat);
-      floorMesh.rotation.x = -Math.PI / 2;
-      floorMesh.receiveShadow = !isSoftwareGl;
-      scene.add(floorMesh);
-      shootableMeshes.push(floorMesh);
-
-      const wallTex = createProceduralTexture('sandstone', maxAniso);
-      wallTex.repeat.set(8, 2);
-      const wallMat = new THREE.MeshStandardMaterial({
-        map: wallTex,
-        roughness: 0.86,
-      });
-
-      const brickTex = createProceduralTexture('brick', maxAniso);
-      brickTex.repeat.set(4, 2);
-      const brickMat = new THREE.MeshStandardMaterial({
-        map: brickTex,
-        roughness: 0.82,
-      });
-
-      const crateTex = createProceduralTexture('crate', maxAniso);
-      const crateMat = new THREE.MeshStandardMaterial({
-        map: crateTex,
-        roughness: 0.76,
-      });
-      const trimMat = new THREE.MeshStandardMaterial({
-        color: 0x3b2818,
-        roughness: 0.6,
-        metalness: 0.3,
-      });
-
-      // Paredes Perimetrais da Arena Fechada (60x60m)
-      addArenaBlock(0, 4.5, -30, 60, 9, 2, wallMat);
-      addArenaBlock(0, 4.5, 30, 60, 9, 2, wallMat);
-      addArenaBlock(-30, 4.5, 0, 2, 9, 60, wallMat);
-      addArenaBlock(30, 4.5, 0, 2, 9, 60, wallMat);
-
-      // Estruturas Táticas Estilo "Dust II"
-      addArenaBlock(-11, 3.2, -5, 2.2, 6.4, 18, wallMat);
-      addArenaBlock(11, 3.2, 5, 2.2, 6.4, 18, wallMat);
-      addArenaBlock(-5.5, 3.2, -15, 9, 6.4, 2.2, brickMat);
-      addArenaBlock(6.5, 3.2, -15, 9, 6.4, 2.2, brickMat);
-      addArenaBlock(0.5, 5.4, -15, 4, 2.0, 2.4, brickMat);
-
-      addArenaBlock(-19, 3.2, 13, 3.2, 6.4, 3.2, brickMat);
-      addArenaBlock(19, 3.2, -13, 3.2, 6.4, 3.2, brickMat);
-
-      const cratePlacements: [number, number, number, number][] = [
-        [-4.5, 11, 2.4, 0],
-        [5.5, 13, 2.4, 0],
-        [5.5, 13, 1.8, 2.4],
-        [-17, 6, 2.6, 0],
-        [-19, -12, 2.5, 0],
-        [17, -9, 2.6, 0],
-        [17, -9, 1.9, 2.6],
-        [0, 0, 2.5, 0],
-        [18, 17, 2.4, 0],
-        [-7, -22, 2.4, 0],
-        [8, -22, 2.4, 0],
-        [-22, 20, 2.5, 0],
-      ];
-      cratePlacements.forEach(([cx, cz, sz, sy]) =>
-        addCompositeCrate(cx, cz, sz, crateMat, trimMat, sy)
-      );
-
+      loadArenaMap(player.mapId);
       startNew5v5Round();
 
       if (!isSoftwareGl) {
@@ -1965,13 +1382,19 @@ export default function App() {
           const moveSpeed =
             player.zoomLevel > 0 ? 4.8 : isKnifeEquipped ? 10.4 : activeWId === 'awp' ? 7.3 : 8.5;
 
+          const currentFootY = player.pos.y - player.eyeHeight;
           const nextX = player.pos.x + _moveDir.x * moveSpeed * dt;
           const nextZ = player.pos.z + _moveDir.z * moveSpeed * dt;
 
-          if (!collidesWithWorld(nextX, player.pos.z, player.radius, player.pos.y)) {
+          const nextGroundX = getGroundElevationAt(nextX, player.pos.z, currentFootY, elevationZones);
+          const testEyeYX = Math.max(player.pos.y, nextGroundX + player.eyeHeight);
+          if (!collidesWithWorld(nextX, player.pos.z, player.radius, testEyeYX)) {
             player.pos.x = nextX;
           }
-          if (!collidesWithWorld(player.pos.x, nextZ, player.radius, player.pos.y)) {
+
+          const nextGroundZ = getGroundElevationAt(player.pos.x, nextZ, currentFootY, elevationZones);
+          const testEyeYZ = Math.max(player.pos.y, nextGroundZ + player.eyeHeight);
+          if (!collidesWithWorld(player.pos.x, nextZ, player.radius, testEyeYZ)) {
             player.pos.z = nextZ;
           }
 
@@ -1980,13 +1403,29 @@ export default function App() {
             player.onGround = false;
           }
         }
-        player.vel.y -= 20.0 * dt;
-        player.pos.y += player.vel.y * dt;
 
-        if (player.pos.y <= player.eyeHeight) {
-          player.pos.y = player.eyeHeight;
+        const groundFloorY = getGroundElevationAt(
+          player.pos.x,
+          player.pos.z,
+          player.pos.y - player.eyeHeight,
+          elevationZones
+        );
+        const minEyeY = groundFloorY + player.eyeHeight;
+
+        if (player.onGround && player.vel.y <= 0 && Math.abs(player.pos.y - minEyeY) <= 0.48) {
+          // Acompanha suavemente a subida e descida dos degraus das escadarias e lajes
+          player.pos.y = minEyeY;
           player.vel.y = 0;
-          player.onGround = true;
+        } else {
+          player.vel.y -= 20.0 * dt;
+          player.pos.y += player.vel.y * dt;
+          if (player.pos.y <= minEyeY) {
+            player.pos.y = minEyeY;
+            player.vel.y = 0;
+            player.onGround = true;
+          } else {
+            player.onGround = false;
+          }
         }
 
         player.cameraShake = THREE.MathUtils.damp(player.cameraShake, 0, 16, dt);
@@ -2005,22 +1444,43 @@ export default function App() {
           player.bobPhase += dt * 1.8;
         }
 
+        if (player.inspectTimer > 0) {
+          player.inspectTimer = Math.max(0, player.inspectTimer - dt);
+        }
+
         if (weaponGroup) {
           const reloadDip = player.isReloading
             ? Math.sin(player.reloadTimer * Math.PI * 1.5) * -0.18 - 0.12
             : 0;
-          weaponGroup.position.x = Math.cos(player.bobPhase * 0.5) * 0.014;
+          // Animação suave de inspeção de arma em 1ª pessoa (Tecla [F] — 1.85s)
+          const inspectProgress =
+            player.inspectTimer > 0 ? 1 - player.inspectTimer / 1.85 : 0;
+          const inspectWave =
+            player.inspectTimer > 0 ? Math.sin(inspectProgress * Math.PI) : 0;
+          const inspectTiltSide =
+            player.inspectTimer > 0 ? Math.sin(inspectProgress * Math.PI * 2) : 0;
+
+          weaponGroup.position.x =
+            Math.cos(player.bobPhase * 0.5) * 0.014 - inspectWave * 0.09;
           weaponGroup.position.y =
             Math.abs(Math.sin(player.bobPhase)) * 0.018 +
             reloadDip +
-            player.equipAnimOffset;
+            player.equipAnimOffset +
+            inspectWave * 0.055;
           weaponGroup.position.z =
-            player.recoilOffset * 1.45 - player.knifeSwingOffset * 0.28;
+            player.recoilOffset * 1.45 -
+            player.knifeSwingOffset * 0.28 +
+            inspectWave * 0.05;
           weaponGroup.rotation.x =
             player.recoilOffset * 1.9 -
             player.knifeSwingOffset * 0.75 +
-            (player.isReloading ? -0.35 : 0);
-          weaponGroup.rotation.y = -player.knifeSwingOffset * 0.45;
+            (player.isReloading ? -0.35 : 0) +
+            inspectWave * 0.16;
+          weaponGroup.rotation.y =
+            -player.knifeSwingOffset * 0.45 +
+            inspectWave * 0.52 +
+            inspectTiltSide * 0.24;
+          weaponGroup.rotation.z = inspectWave * 0.34 - inspectTiltSide * 0.18;
         }
       } else {
         // MODO ESPECTADOR ALIADO (Quando o jogador morreu mas ainda há bots aliados vivos no round)
@@ -2055,12 +1515,12 @@ export default function App() {
       // ========================================================================
       const losRay = new THREE.Raycaster();
 
-      // Auxiliar para verificar se o Bot tem Linha de Visão (LOS) limpa até um ponto
+      // Auxiliar para verificar se o Bot tem Linha de Visão (LOS) limpa até um ponto (suporta altura 3D das lajes)
       const checkBotLineOfSight = (
         botPos: THREE.Vector3,
         targetEyePos: THREE.Vector3
       ): boolean => {
-        _eyeOrigin.set(botPos.x, 1.52, botPos.z);
+        _eyeOrigin.set(botPos.x, botPos.y + 1.52, botPos.z);
         _rayDir.copy(targetEyePos).sub(_eyeOrigin);
         const fullDist = _rayDir.length();
         if (fullDist < 0.2) return true;
@@ -2104,7 +1564,7 @@ export default function App() {
             const d = bot.group.position.distanceTo(other.group.position);
             const otherEye = new THREE.Vector3(
               other.group.position.x,
-              1.48,
+              other.group.position.y + 1.48,
               other.group.position.z
             );
             const visible = d < 52 && checkBotLineOfSight(bot.group.position, otherEye);
@@ -2160,19 +1620,19 @@ export default function App() {
         );
 
         if (!hasLOS && (distToGoal < 2.4 || bot.waypointTimer <= 0)) {
-          // Escolhe um waypoint que aproxime o bot da posição do inimigo mais próximo
-          let bestWpIdx = (bot.waypointIndex + 1) % ARENA_WAYPOINTS.length;
+          // Escolhe um waypoint 3D que aproxime o bot da posição do inimigo mais próximo (incluindo escadarias e lajes)
+          let bestWpIdx = (bot.waypointIndex + 1) % activeWaypoints.length;
           let bestScore = Infinity;
-          for (let w = 0; w < ARENA_WAYPOINTS.length; w++) {
-            const wp = ARENA_WAYPOINTS[w];
+          for (let w = 0; w < activeWaypoints.length; w++) {
+            const wp = activeWaypoints[w];
             const dFromBot = Math.hypot(
               wp[0] - bot.group.position.x,
-              wp[1] - bot.group.position.z
+              wp[2] - bot.group.position.z
             );
             if (dFromBot < 2.2) continue;
             const dToEnemy = Math.hypot(
               wp[0] - combatTargetPos.x,
-              wp[1] - combatTargetPos.z
+              wp[2] - combatTargetPos.z
             );
             const score = dToEnemy * 0.75 + dFromBot * 0.45 + Math.random() * 4.5;
             if (score < bestScore) {
@@ -2181,10 +1641,11 @@ export default function App() {
             }
           }
           bot.waypointIndex = bestWpIdx;
+          const chosenWp = activeWaypoints[bestWpIdx] || [0, 0, 0];
           bot.patrolGoal.set(
-            ARENA_WAYPOINTS[bestWpIdx][0] + (Math.random() - 0.5) * 2.2,
-            0,
-            ARENA_WAYPOINTS[bestWpIdx][1] + (Math.random() - 0.5) * 2.2
+            chosenWp[0] + (Math.random() - 0.5) * 1.8,
+            chosenWp[1],
+            chosenWp[2] + (Math.random() - 0.5) * 1.8
           );
           bot.waypointTimer = 3.2 + Math.random() * 2.4;
         }
@@ -2193,7 +1654,7 @@ export default function App() {
         const moveGoalPos = hasLOS ? combatTargetPos : bot.patrolGoal;
         const lookGoalPos = hasLOS ? combatTargetPos : bot.patrolGoal;
 
-        bot.group.lookAt(lookGoalPos.x, 0, lookGoalPos.z);
+        bot.group.lookAt(lookGoalPos.x, bot.group.position.y, lookGoalPos.z);
 
         const combatDist = Math.hypot(
           combatTargetPos.x - bot.group.position.x,
@@ -2271,12 +1732,31 @@ export default function App() {
           const probeX = bot.group.position.x + dirX * 0.95;
           const probeZ = bot.group.position.z + dirZ * 0.95;
 
+          const candGroundY = getGroundElevationAt(
+            candidateX,
+            candidateZ,
+            bot.group.position.y,
+            elevationZones
+          );
+          const probeGroundY = getGroundElevationAt(
+            probeX,
+            probeZ,
+            bot.group.position.y,
+            elevationZones
+          );
+
           if (
-            !collidesWithWorld(candidateX, candidateZ, 0.56) &&
-            !collidesWithWorld(probeX, probeZ, 0.56)
+            !collidesWithWorld(candidateX, candidateZ, 0.56, candGroundY + 1.72) &&
+            !collidesWithWorld(probeX, probeZ, 0.56, probeGroundY + 1.72)
           ) {
             bot.group.position.x = candidateX;
             bot.group.position.z = candidateZ;
+            bot.group.position.y = THREE.MathUtils.damp(
+              bot.group.position.y,
+              candGroundY,
+              18,
+              dt
+            );
             movedBot = true;
             if (a > 2 && !hasLOS) {
               bot.waypointTimer = Math.min(bot.waypointTimer, 0.6);
@@ -2289,11 +1769,15 @@ export default function App() {
         if (!movedBot) {
           const tryX = bot.group.position.x + desiredDirX * stepDist;
           const tryZ = bot.group.position.z + desiredDirZ * stepDist;
-          if (!collidesWithWorld(tryX, bot.group.position.z, 0.55)) {
+          const gx = getGroundElevationAt(tryX, bot.group.position.z, bot.group.position.y, elevationZones);
+          const gz = getGroundElevationAt(bot.group.position.x, tryZ, bot.group.position.y, elevationZones);
+          if (!collidesWithWorld(tryX, bot.group.position.z, 0.55, gx + 1.72)) {
             bot.group.position.x = tryX;
+            bot.group.position.y = gx;
             movedBot = true;
-          } else if (!collidesWithWorld(bot.group.position.x, tryZ, 0.55)) {
+          } else if (!collidesWithWorld(bot.group.position.x, tryZ, 0.55, gz + 1.72)) {
             bot.group.position.z = tryZ;
+            bot.group.position.y = gz;
             movedBot = true;
           } else {
             bot.strafeDir *= -1;
@@ -2372,7 +1856,7 @@ export default function App() {
                       bot.team,
                       `Você (${player.team === 'CT' ? 'PM' : 'Bandidos'})`,
                       player.team,
-                      bot.team === 'CT' ? 'M4A1' : 'AK-47',
+                      bot.weaponLabel,
                       false
                     );
 
@@ -2397,10 +1881,10 @@ export default function App() {
                   spawnImpactSparks(missEnd, new THREE.Vector3(0, 1, 0), tracerColor);
                 }
               } else if (bestEnemyBot) {
-                // Combate Tático Bot vs Bot com Tracer 3D
+                // Combate Tático Bot vs Bot com Tracer 3D (respeitando altura das lajes)
                 const botTargetCenter = new THREE.Vector3(
                   bestEnemyBot.group.position.x + (Math.random() - 0.5) * 0.45,
-                  1.25 + (Math.random() - 0.5) * 0.35,
+                  bestEnemyBot.group.position.y + 1.25 + (Math.random() - 0.5) * 0.35,
                   bestEnemyBot.group.position.z + (Math.random() - 0.5) * 0.45
                 );
                 spawnBulletTracer(muzzleWorld, botTargetCenter, tracerColor);
@@ -2424,7 +1908,7 @@ export default function App() {
                       bot.team,
                       bestEnemyBot.name,
                       bestEnemyBot.team,
-                      bot.team === 'CT' ? 'M4A1' : 'AK-47',
+                      bot.weaponLabel,
                       isBotHS
                     );
                     evaluateRoundOutcome(false);
@@ -2542,6 +2026,8 @@ export default function App() {
 
       if (e.code === 'KeyR' && gameRef.current.isLocked) {
         startReload();
+      } else if (e.code === 'KeyF' && gameRef.current.isLocked && !player.isDead && !player.isReloading) {
+        player.inspectTimer = 1.85;
       } else if (e.code === 'KeyZ' && gameRef.current.isLocked) {
         handleSecondaryAction();
       } else if (e.code === 'KeyQ' && gameRef.current.gameMode === 'playing') {
@@ -2620,6 +2106,7 @@ export default function App() {
       setGameMode('playing');
       renderer.domElement.requestPointerLock?.();
     };
+    gameRef.current.selectMap = selectMapAndSetup;
     gameRef.current.selectTeamAndStart = selectTeamAndStartMatch;
     gameRef.current.takeoverAlliedBot = takeoverAlliedBot;
     gameRef.current.buyItem = buyEquipment;
@@ -2652,6 +2139,9 @@ export default function App() {
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
       audioRef.current.stopMusic();
+      if (currentBuiltMap) {
+        currentBuiltMap.dispose();
+      }
       document.removeEventListener('pointerlockchange', onPointerLockChange);
       window.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('mousemove', onMouseMove);
@@ -3072,16 +2562,16 @@ export default function App() {
             {/* 1. ABA PRINCIPAL */}
             {menuTab === 'main' && (
               <div className="max-w-lg w-full bg-zinc-950/65 backdrop-blur-xl border border-white/15 rounded-3xl p-8 shadow-2xl">
-                <div className="mb-7">
+                <div className="mb-6">
                   <div className="text-xs font-semibold text-amber-400 uppercase tracking-widest mb-1">
-                    Arena Tática 5v5 · Dust II
+                    Arena Tática 5v5 · Mapa: {MAP_CATALOG[hud.activeMapId].name}
                   </div>
                   <h1 className="text-4xl font-black tracking-tight text-white">
                     COUNTER-STRIKE
                   </h1>
                   <p className="text-sm text-zinc-300 mt-2 leading-relaxed">
-                    Combate competitivo 5v5 em primeira pessoa com 10s de preparo, loja de armas e
-                    troca rápida de equipamento.
+                    Combate competitivo 5v5 em primeira pessoa com cenários brasileiros do Rio de Janeiro,
+                    loja tática de armas e troca rápida de equipamento.
                   </p>
                 </div>
 
@@ -3095,11 +2585,25 @@ export default function App() {
                       <div className="text-left">
                         <div>Jogar 5v5 Agora</div>
                         <div className="text-[11px] font-semibold text-zinc-800 normal-case">
-                          Equipe: {hud.playerTeam === 'CT' ? 'Polícia Militar (PM)' : 'Bandidos'}
+                          {MAP_CATALOG[hud.activeMapId].name} · Equipe:{' '}
+                          {hud.playerTeam === 'CT' ? 'Polícia Militar (PM)' : 'Bandidos'}
                         </div>
                       </div>
                     </div>
                     <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                  </button>
+
+                  <button
+                    onClick={() => setMenuTab('maps')}
+                    className="px-5 py-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-100 font-semibold text-xs flex items-center justify-between transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-3">
+                      <MapPin className="w-4 h-4 text-sky-400" />
+                      <span>Selecionar Mapa</span>
+                    </div>
+                    <span className="text-xs font-bold text-amber-400">
+                      {MAP_CATALOG[hud.activeMapId].name} ({MAP_CATALOG[hud.activeMapId].location})
+                    </span>
                   </button>
 
                   <button
@@ -3127,7 +2631,7 @@ export default function App() {
                       <Swords className="w-4 h-4 text-amber-400" />
                       <span>Arsenal de Armas</span>
                     </div>
-                    <span className="text-xs text-zinc-400">8 Armas</span>
+                    <span className="text-xs text-zinc-400">17 Armas</span>
                   </button>
 
                   <button
@@ -3138,8 +2642,250 @@ export default function App() {
                       <Keyboard className="w-4 h-4 text-amber-400" />
                       <span>Controles</span>
                     </div>
-                    <span className="text-xs text-zinc-400">WASD, B, Q, E</span>
+                    <span className="text-xs text-zinc-400">WASD, B, Q, F, E</span>
                   </button>
+                </div>
+              </div>
+            )}
+
+            {/* 1.5. ABA DE SELEÇÃO DE MAPAS (DUST II + VIELAS RJ) */}
+            {menuTab === 'maps' && (
+              <div className="max-w-3xl w-full bg-zinc-950/85 backdrop-blur-xl border border-white/15 rounded-3xl p-7 shadow-2xl max-h-[84vh] flex flex-col">
+                <div className="flex items-center justify-between border-b border-white/10 pb-4 mb-5">
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      onClick={() => setMenuTab('main')}
+                      className="p-1.5 rounded-lg hover:bg-white/10 text-zinc-300 cursor-pointer"
+                    >
+                      <ArrowLeft className="w-5 h-5" />
+                    </button>
+                    <div>
+                      <h2 className="text-lg font-bold text-white">Seleção de Mapas 3D</h2>
+                      <p className="text-xs text-zinc-400">
+                        Escolha o cenário para a partida 5v5 (apenas o mapa ativo é mantido na GPU)
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-semibold text-amber-400">
+                    Ativo: {MAP_CATALOG[hud.activeMapId].name}
+                  </span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-4 pr-1">
+                  {Object.values(MAP_CATALOG).map((mapMeta) => {
+                    const isSelected = hud.activeMapId === mapMeta.id;
+                    return (
+                      <div
+                        key={mapMeta.id}
+                        className={`p-4 rounded-2xl border flex flex-col justify-between transition-all ${
+                          isSelected
+                            ? 'bg-amber-400/10 border-amber-400 shadow-lg'
+                            : 'bg-white/5 hover:bg-white/10 border-white/10'
+                        }`}
+                      >
+                        <div>
+                          {/* Ilustração Vetorial de Pré-Visualização do Mapa */}
+                          <div className="relative h-36 w-full rounded-xl overflow-hidden mb-3.5 border border-white/10 bg-zinc-900">
+                            {mapMeta.id === 'vielas' ? (
+                              <svg viewBox="0 0 320 140" className="w-full h-full" aria-label="Preview Vielas">
+                                <defs>
+                                  <linearGradient id="skyVielas" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor="#0284c7" />
+                                    <stop offset="65%" stopColor="#38bdf8" />
+                                    <stop offset="100%" stopColor="#fde68a" />
+                                  </linearGradient>
+                                </defs>
+                                <rect width="320" height="140" fill="url(#skyVielas)" />
+                                {/* Casas em camadas no morro com tijolo baiano e caixas d'água azuis */}
+                                <rect x="18" y="48" width="68" height="72" fill="#b4532a" stroke="#783519" strokeWidth="2" />
+                                <rect x="14" y="43" width="76" height="6" fill="#64748b" />
+                                {/* Caixa d'água azul */}
+                                <rect x="52" y="28" width="22" height="15" rx="2" fill="#0284c7" stroke="#bae6fd" strokeWidth="1.5" />
+                                {/* Passarela elevada central */}
+                                <rect x="86" y="64" width="148" height="9" fill="#9ca3af" stroke="#4b5563" strokeWidth="1.5" />
+                                {/* Casa Leste e Oficina */}
+                                <rect x="234" y="45" width="68" height="75" fill="#d99b4e" stroke="#92400e" strokeWidth="2" />
+                                <rect x="246" y="27" width="22" height="16" rx="2" fill="#0284c7" stroke="#bae6fd" strokeWidth="1.5" />
+                                {/* Escadarias brancas subindo para as lajes */}
+                                <path d="M88,120 L115,73 L132,73 L106,120 Z" fill="#d4d4d8" />
+                                <path d="M232,120 L205,73 L188,73 L214,120 Z" fill="#d4d4d8" />
+                                {/* Fiação aérea */}
+                                <path d="M10,22 Q160,44 310,18" stroke="#18181b" strokeWidth="1.8" fill="none" />
+                                <path d="M10,28 Q160,52 310,25" stroke="#18181b" strokeWidth="1.4" fill="none" />
+                                {/* Piso de paralelepípedo */}
+                                <rect x="0" y="118" width="320" height="22" fill="#52525b" />
+                              </svg>
+                            ) : mapMeta.id === 'orla' ? (
+                              <svg viewBox="0 0 320 140" className="w-full h-full" aria-label="Preview Orla">
+                                <defs>
+                                  <linearGradient id="skyOrla" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor="#0284c7" />
+                                    <stop offset="100%" stopColor="#bae6fd" />
+                                  </linearGradient>
+                                </defs>
+                                <rect width="320" height="140" fill="url(#skyOrla)" />
+                                {/* Prédios da Avenida Atlântica a Oeste */}
+                                <rect x="14" y="26" width="54" height="84" fill="#e2e8f0" stroke="#64748b" strokeWidth="1.5" />
+                                <rect x="22" y="34" width="38" height="10" fill="#0f172a" />
+                                <rect x="22" y="52" width="38" height="10" fill="#0f172a" />
+                                <rect x="22" y="70" width="38" height="10" fill="#0f172a" />
+                                {/* Quiosque do Calçadão */}
+                                <polygon points="92,72 120,54 148,72" fill="#047857" />
+                                <rect x="102" y="72" width="36" height="36" fill="#78350f" />
+                                {/* Posto de Salva-Vidas Branco na Areia */}
+                                <rect x="178" y="62" width="52" height="44" rx="2" fill="#f8fafc" stroke="#94a3b8" strokeWidth="1.5" />
+                                <rect x="172" y="56" width="64" height="6" fill="#0284c7" />
+                                {/* Guarda-sol colorido e Mar Azul a Leste */}
+                                <polygon points="244,78 264,65 284,78" fill="#ef4444" />
+                                <rect x="263" y="78" width="2" height="28" fill="#1e293b" />
+                                {/* Faixas de Calçadão, Areia e Mar */}
+                                <rect x="0" y="108" width="135" height="32" fill="#1e293b" />
+                                <path d="M5,122 Q35,112 65,122 T125,122" stroke="#f8fafc" strokeWidth="4" fill="none" />
+                                <rect x="135" y="108" width="125" height="32" fill="#f3d9a4" />
+                                <rect x="260" y="104" width="60" height="36" fill="#0284c7" />
+                              </svg>
+                            ) : mapMeta.id === 'centro' ? (
+                              <svg viewBox="0 0 320 140" className="w-full h-full" aria-label="Preview Centro">
+                                <defs>
+                                  <linearGradient id="skyCentro" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor="#38bdf8" />
+                                    <stop offset="100%" stopColor="#e2e8f0" />
+                                  </linearGradient>
+                                </defs>
+                                <rect width="320" height="140" fill="url(#skyCentro)" />
+                                {/* Galeria Histórica Saara e Marquise a Oeste */}
+                                <rect x="12" y="34" width="66" height="76" fill="#e5cca0" stroke="#7f5539" strokeWidth="1.5" />
+                                <rect x="18" y="44" width="22" height="24" fill="#1e293b" />
+                                <rect x="48" y="44" width="22" height="24" fill="#1e293b" />
+                                <rect x="10" y="74" width="76" height="6" fill="#334155" />
+                                {/* Banca de Jornal Verde no Largo Central */}
+                                <rect x="92" y="82" width="32" height="28" fill="#047857" stroke="#064e3b" strokeWidth="1.5" />
+                                <rect x="89" y="78" width="38" height="5" fill="#1e293b" />
+                                {/* Terraço Elevado do Largo da Carioca (+2.4m) com Escadarias */}
+                                <polygon points="132,110 146,84 198,84 212,110" fill="#64748b" />
+                                <rect x="146" y="78" width="52" height="7" fill="#cbd5e1" />
+                                <rect x="168" y="62" width="8" height="16" fill="#1e293b" />
+                                {/* Edifícios Corporativos da Av. Rio Branco a Leste */}
+                                <rect x="246" y="16" width="62" height="94" fill="#64748b" stroke="#334155" strokeWidth="1.5" />
+                                <rect x="254" y="24" width="46" height="14" fill="#1e3a5f" />
+                                <rect x="254" y="44" width="46" height="14" fill="#172554" />
+                                <rect x="254" y="64" width="46" height="14" fill="#1e3a5f" />
+                                {/* Táxi Carioca Amarelo com Faixa Azul na Avenida */}
+                                <rect x="214" y="94" width="28" height="14" rx="2" fill="#facc15" />
+                                <rect x="214" y="99" width="28" height="3" fill="#0284c7" />
+                                {/* Calçada de Pedra Portuguesa e Avenida Asfaltada com Faixa de Pedestres */}
+                                <rect x="0" y="110" width="205" height="30" fill="#cbd5e1" />
+                                <rect x="205" y="110" width="115" height="30" fill="#27272a" />
+                                <rect x="214" y="116" width="14" height="4" fill="#f8fafc" />
+                                <rect x="234" y="116" width="14" height="4" fill="#f8fafc" />
+                                <rect x="254" y="116" width="14" height="4" fill="#f8fafc" />
+                                <rect x="274" y="116" width="14" height="4" fill="#f8fafc" />
+                              </svg>
+                            ) : mapMeta.id === 'complexo' ? (
+                              <svg viewBox="0 0 320 140" className="w-full h-full" aria-label="Preview Complexo">
+                                <defs>
+                                  <linearGradient id="skyComplexo" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor="#2563eb" />
+                                    <stop offset="100%" stopColor="#dbeafe" />
+                                  </linearGradient>
+                                </defs>
+                                <rect width="320" height="140" fill="url(#skyComplexo)" />
+                                {/* Bloco Habitacional Oeste (A-01) com Caixa d'Água */}
+                                <rect x="12" y="26" width="66" height="86" fill="#d6a868" stroke="#78350f" strokeWidth="1.5" />
+                                <rect x="28" y="14" width="28" height="12" rx="1.5" fill="#0284c7" />
+                                <rect x="20" y="36" width="18" height="14" fill="#1e293b" />
+                                <rect x="46" y="36" width="18" height="14" fill="#1e293b" />
+                                <rect x="20" y="58" width="18" height="14" fill="#1e293b" />
+                                <rect x="46" y="58" width="18" height="14" fill="#1e293b" />
+                                {/* Bloco Habitacional Leste em Pilotis (B-02) com Garagem Coberta */}
+                                <rect x="242" y="24" width="66" height="62" fill="#7ba3be" stroke="#1e3a8a" strokeWidth="1.5" />
+                                <rect x="260" y="12" width="28" height="12" rx="1.5" fill="#0284c7" />
+                                <rect x="246" y="86" width="8" height="26" fill="#475569" />
+                                <rect x="296" y="86" width="8" height="26" fill="#475569" />
+                                {/* Varandas (+2.6m), Escadarias e Passarela Aérea Central */}
+                                <rect x="78" y="68" width="164" height="8" fill="#94a3b8" stroke="#334155" strokeWidth="1.5" />
+                                <rect x="155" y="76" width="10" height="36" fill="#64748b" />
+                                <polygon points="78,112 96,76 112,76 94,112" fill="#cbd5e1" />
+                                <polygon points="242,112 224,76 208,76 226,112" fill="#cbd5e1" />
+                                {/* Pátio Comunitário e Quadra Verde no Centro */}
+                                <rect x="0" y="112" width="320" height="28" fill="#475569" />
+                                <rect x="96" y="116" width="128" height="20" fill="#0f766e" stroke="#f8fafc" strokeWidth="1.5" />
+                              </svg>
+                            ) : (
+                              <svg viewBox="0 0 320 140" className="w-full h-full" aria-label="Preview Dust II">
+                                <defs>
+                                  <linearGradient id="skyDust" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor="#d97706" />
+                                    <stop offset="100%" stopColor="#fde68a" />
+                                  </linearGradient>
+                                </defs>
+                                <rect width="320" height="140" fill="url(#skyDust)" />
+                                {/* Muralhas e Portão Norte de Arenito */}
+                                <rect x="20" y="42" width="95" height="76" fill="#cfa977" stroke="#92400e" strokeWidth="2" />
+                                <rect x="205" y="42" width="95" height="76" fill="#cfa977" stroke="#92400e" strokeWidth="2" />
+                                <rect x="108" y="34" width="104" height="26" fill="#965238" />
+                                {/* Caixas empilhadas */}
+                                <rect x="65" y="88" width="30" height="30" fill="#a46b39" stroke="#5c3818" strokeWidth="2" />
+                                <rect x="225" y="88" width="30" height="30" fill="#a46b39" stroke="#5c3818" strokeWidth="2" />
+                                <rect x="0" y="118" width="320" height="22" fill="#e3c18f" />
+                              </svg>
+                            )}
+
+                            <div className="absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-full bg-zinc-950/80 backdrop-blur-md border border-white/15 text-[10px] font-bold text-amber-400">
+                              {mapMeta.location}
+                            </div>
+                            {isSelected && (
+                              <div className="absolute top-2.5 right-2.5 px-2.5 py-0.5 rounded-full bg-emerald-500 text-zinc-950 text-[10px] font-black uppercase">
+                                Selecionado
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex items-start justify-between gap-2 mb-1">
+                            <div>
+                              <h3 className="text-base font-black text-white">{mapMeta.name}</h3>
+                              <div className="text-xs font-semibold text-amber-400">
+                                {mapMeta.subtitle}
+                              </div>
+                            </div>
+                          </div>
+
+                          <p className="text-xs text-zinc-300 leading-relaxed my-2">
+                            {mapMeta.description}
+                          </p>
+
+                          <div className="space-y-1 text-[11px] text-zinc-400 border-t border-white/10 pt-2.5 mb-3">
+                            <div>
+                              Ambiente: <strong className="text-zinc-200">{mapMeta.environment}</strong>
+                            </div>
+                            <div>
+                              Recomendado:{' '}
+                              <strong className="text-emerald-400">{mapMeta.recommendedPlayers}</strong>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => gameRef.current.selectMap(mapMeta.id, false)}
+                            className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                              isSelected
+                                ? 'bg-white/15 text-white border-amber-400/50'
+                                : 'bg-white/5 hover:bg-white/10 text-zinc-200 border-white/10'
+                            }`}
+                          >
+                            {isSelected ? 'Mapa Ativo' : 'Selecionar'}
+                          </button>
+                          <button
+                            onClick={() => gameRef.current.selectMap(mapMeta.id, true)}
+                            className="flex-1 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider transition-colors cursor-pointer"
+                          >
+                            Jogar neste Mapa
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -3204,7 +2950,7 @@ export default function App() {
 
             {/* 3. ABA ARSENAL DE ARMAS */}
             {menuTab === 'arsenal' && (
-              <div className="max-w-2xl w-full bg-zinc-950/80 backdrop-blur-xl border border-white/15 rounded-3xl p-7 shadow-2xl max-h-[80vh] flex flex-col">
+              <div className="max-w-3xl w-full bg-zinc-950/85 backdrop-blur-xl border border-white/15 rounded-3xl p-7 shadow-2xl max-h-[82vh] flex flex-col">
                 <div className="flex items-center justify-between border-b border-white/10 pb-4 mb-4">
                   <div className="flex items-center gap-2.5">
                     <button
@@ -3213,41 +2959,66 @@ export default function App() {
                     >
                       <ArrowLeft className="w-5 h-5" />
                     </button>
-                    <h2 className="text-lg font-bold text-white">Arsenal Disponível</h2>
+                    <div>
+                      <h2 className="text-lg font-bold text-white">Arsenal Tático Brasileiro (17 Armas)</h2>
+                      <p className="text-xs text-zinc-400">
+                        Armamentos da Polícia Militar (PM) e Facções Criminosas · Tecla [B] na partida
+                      </p>
+                    </div>
                   </div>
-                  <span className="text-xs text-zinc-400">Tecla [B] durante a partida</span>
+                  <span className="text-xs text-amber-400 font-semibold">Tecla [F] Inspeciona 3D</span>
                 </div>
 
                 <div className="flex-1 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-3 pr-1">
                   {Object.values(WEAPON_CATALOG).map((spec) => (
                     <div
                       key={spec.id}
-                      className="p-3.5 rounded-2xl bg-white/5 border border-white/10 flex flex-col justify-between"
+                      className="p-3.5 rounded-2xl bg-white/5 border border-white/10 flex flex-col justify-between gap-2"
                     >
-                      <div className="flex items-start justify-between mb-2">
+                      <div className="flex items-start justify-between gap-2">
                         <div>
-                          <div className="text-[11px] text-zinc-400">{spec.category}</div>
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            <span className="text-[11px] text-zinc-400">{spec.category}</span>
+                            <span
+                              className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
+                                spec.factionTag === 'PM'
+                                  ? 'bg-sky-500/20 text-sky-300 border border-sky-400/30'
+                                  : spec.factionTag === 'BANDIDOS'
+                                  ? 'bg-rose-500/20 text-rose-300 border border-rose-400/30'
+                                  : 'bg-zinc-500/20 text-zinc-300 border border-zinc-400/30'
+                              }`}
+                            >
+                              {spec.factionTag}
+                            </span>
+                          </div>
                           <div className="text-sm font-bold text-white">{spec.name}</div>
                         </div>
-                        <span className="text-sm font-bold text-amber-400">
+                        <span className="text-sm font-bold text-amber-400 shrink-0">
                           {spec.isMelee ? 'Grátis' : `$${spec.price}`}
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-3 text-xs text-zinc-300 border-t border-white/10 pt-2">
+                      <p className="text-[11px] text-zinc-400 leading-snug">{spec.description}</p>
+
+                      <div className="flex items-center justify-between text-xs text-zinc-300 border-t border-white/10 pt-2">
                         <span>
                           Dano:{' '}
                           <strong className="text-white">
-                            {spec.pellets
-                              ? `${spec.damage}x${spec.pellets}`
-                              : spec.damage}
+                            {spec.pellets ? `${spec.damage}x${spec.pellets}` : spec.damage}
                           </strong>
                         </span>
                         <span>·</span>
                         <span>
-                          Pente:{' '}
+                          Munição:{' '}
                           <strong className="text-white">
                             {spec.isMelee ? '∞' : `${spec.clipSize}/${spec.reserveMax}`}
+                          </strong>
+                        </span>
+                        <span>·</span>
+                        <span>
+                          Cadência:{' '}
+                          <strong className="text-white">
+                            {spec.auto ? 'Auto' : 'Semi'}
                           </strong>
                         </span>
                       </div>
@@ -3288,8 +3059,9 @@ export default function App() {
 
                   <div className="p-3.5 rounded-2xl bg-white/5 border border-white/10 space-y-1.5 text-zinc-300">
                     <div className="font-bold text-white mb-1">Equipamento</div>
-                    <div><strong className="text-amber-400">B</strong> · Abrir Loja</div>
+                    <div><strong className="text-amber-400">B</strong> · Abrir Loja Tática</div>
                     <div><strong className="text-amber-400">Q / 1, 2, 3</strong> · Trocar Arma</div>
+                    <div><strong className="text-amber-400">F</strong> · Inspecionar Arma 3D</div>
                   </div>
 
                   <div className="p-3.5 rounded-2xl bg-white/5 border border-white/10 space-y-1.5 text-zinc-300">
@@ -3304,7 +3076,9 @@ export default function App() {
 
           {/* Rodapé Discreto */}
           <footer className="relative z-10 px-8 py-3 bg-zinc-950/60 backdrop-blur-md border-t border-white/10 text-xs text-zinc-400 flex items-center justify-between">
-            <span>Dust II 5v5</span>
+            <span>
+              Mapa Ativo: <strong className="text-white">{MAP_CATALOG[hud.activeMapId].name}</strong> · 5v5 Arsenal Brasileiro
+            </span>
             <button
               onClick={() => gameRef.current.requestLock()}
               className="text-amber-400 font-semibold hover:underline cursor-pointer"
@@ -3322,10 +3096,10 @@ export default function App() {
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
           <div className="max-w-md w-full bg-zinc-950/85 backdrop-blur-xl border border-white/15 rounded-3xl p-7 shadow-2xl text-center">
             <div className="text-xs font-semibold uppercase tracking-widest text-zinc-400 mb-1">
-              Partida 5v5
+              Partida 5v5 · Mapa: {MAP_CATALOG[hud.activeMapId].name}
             </div>
             <h2 className="text-2xl font-black text-white mb-2">Jogo Pausado</h2>
-            <div className="inline-flex items-center gap-3 bg-white/5 border border-white/10 rounded-full px-4 py-1 text-xs text-zinc-300 mb-6">
+            <div className="inline-flex items-center gap-3 bg-white/5 border border-white/10 rounded-full px-4 py-1 text-xs text-zinc-300 mb-5">
               <span className="font-bold text-sky-400">PM {hud.ctScore}</span>
               <span>·</span>
               <span className="font-mono text-white">{formatRoundClock(hud.roundTimeSec)}</span>
@@ -3358,6 +3132,24 @@ export default function App() {
                   <RotateCcw className="w-4 h-4 text-zinc-300" />
                   <span>Reiniciar</span>
                 </button>
+              </div>
+
+              {/* Troca Rápida de Mapa no Menu de Pausa */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {Object.values(MAP_CATALOG).map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => gameRef.current.selectMap(m.id, true)}
+                    className={`py-2 px-2.5 rounded-xl border font-semibold text-xs flex items-center justify-center gap-1 transition-colors cursor-pointer ${
+                      hud.activeMapId === m.id
+                        ? 'bg-amber-400/20 border-amber-400 text-amber-300'
+                        : 'bg-white/5 hover:bg-white/10 border-white/10 text-zinc-300'
+                    }`}
+                  >
+                    <MapPin className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">{m.name}</span>
+                  </button>
+                ))}
               </div>
 
               <div className="grid grid-cols-2 gap-2.5">
@@ -3416,102 +3208,238 @@ export default function App() {
       )}
 
       {/* ========================================================================
-          LOJA DE ARMAS TRANSLÚCIDA (TECLA B)
+          LOJA DE ARMAS CATEGORIZADA (TECLA B) — ARSENAL BRASILEIRO (16 ARMAS)
           ======================================================================== */}
       {isBuyOpen && !isCodeModalOpen && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
-          <div className="max-w-2xl w-full bg-zinc-950/85 backdrop-blur-xl border border-white/15 rounded-3xl p-6 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-white/10 pb-4 mb-4">
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/65 backdrop-blur-sm p-4 sm:p-6">
+          <div className="max-w-3xl w-full bg-zinc-950/90 backdrop-blur-xl border border-white/15 rounded-3xl p-6 shadow-2xl max-h-[90vh] flex flex-col">
+            {/* Cabeçalho da Loja */}
+            <div className="flex items-center justify-between border-b border-white/10 pb-3.5 mb-3.5">
               <div>
-                <h2 className="text-lg font-bold text-white">Loja de Equipamentos</h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-lg font-bold text-white">Arsenal Tático · Loja [B]</h2>
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                      hud.playerTeam === 'CT'
+                        ? 'bg-sky-500/20 text-sky-300 border border-sky-400/30'
+                        : 'bg-rose-500/20 text-rose-300 border border-rose-400/30'
+                    }`}
+                  >
+                    {hud.playerTeam === 'CT' ? 'Polícia Militar (PM)' : 'Bandidos (TR)'}
+                  </span>
+                </div>
                 <p className="text-xs text-zinc-400">
-                  Selecione a arma para equipar no Slot 2 ou Slot 3
+                  Escolha a categoria abaixo e equipe no Slot 2 ou Slot 3 · Pressione [F] em jogo para inspecionar
                 </p>
               </div>
               <div className="text-right">
-                <div className="text-[11px] text-zinc-400">Saldo</div>
+                <div className="text-[11px] text-zinc-400">Saldo Disponível</div>
                 <div className="text-xl font-black text-amber-400">${hud.money}</div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-5">
-              {[
-                { key: 'usp', num: '0', spec: WEAPON_CATALOG.usp },
-                { key: 'deagle', num: '1', spec: WEAPON_CATALOG.deagle },
-                { key: 'm3', num: '2', spec: WEAPON_CATALOG.m3 },
-                { key: 'mp5', num: '3', spec: WEAPON_CATALOG.mp5 },
-                { key: 'ak47', num: '4', spec: WEAPON_CATALOG.ak47 },
-                { key: 'm4a1', num: '5', spec: WEAPON_CATALOG.m4a1 },
-                { key: 'awp', num: '6', spec: WEAPON_CATALOG.awp },
-              ].map(({ key, num, spec }) => {
-                const canAfford = hud.money >= spec.price;
-                const inSlot1 = hud.loadout[1] === spec.id;
-                const inSlot2 = hud.loadout[2] === spec.id;
+            {/* Abas de Categoria da Loja */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+              {(
+                [
+                  { id: 'pistols', label: 'Pistolas', count: 6 },
+                  { id: 'shotguns', label: 'Escopetas', count: 3 },
+                  { id: 'rifles', label: 'Fuzis', count: 5 },
+                  { id: 'tactical', label: 'Táticos & Sniper', count: 2 },
+                ] as { id: WeaponShopTab; label: string; count: number }[]
+              ).map((tab) => {
+                const isActive = shopTab === tab.id;
                 return (
-                  <div
-                    key={key}
-                    className={`p-3.5 rounded-2xl border flex flex-col justify-between transition-colors ${
-                      inSlot1 || inSlot2
-                        ? 'bg-amber-400/10 border-amber-400/50'
-                        : canAfford
-                        ? 'bg-white/5 border-white/10'
-                        : 'bg-white/[0.02] border-white/5 opacity-50'
+                  <button
+                    key={tab.id}
+                    onClick={() => setShopTab(tab.id)}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all flex items-center justify-between cursor-pointer ${
+                      isActive
+                        ? 'bg-amber-400 text-zinc-950 border-amber-400 shadow-md'
+                        : 'bg-white/5 hover:bg-white/10 text-zinc-300 border-white/10'
                     }`}
                   >
-                    <div className="flex items-start justify-between mb-2.5">
-                      <div>
-                        <div className="text-[11px] text-zinc-400">
-                          [{num}] {spec.category}
-                        </div>
-                        <div className="text-sm font-bold text-white">{spec.shortName}</div>
-                      </div>
-                      <span className="text-sm font-bold text-amber-400">${spec.price}</span>
-                    </div>
-
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => gameRef.current.buyItem(key, 1)}
-                        className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
-                          inSlot1
-                            ? 'bg-amber-400 text-zinc-950 border-amber-400'
-                            : 'bg-white/5 hover:bg-white/10 text-zinc-200 border-white/10'
-                        }`}
-                      >
-                        Slot 2
-                      </button>
-                      <button
-                        onClick={() => gameRef.current.buyItem(key, 2)}
-                        className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
-                          inSlot2
-                            ? 'bg-amber-400 text-zinc-950 border-amber-400'
-                            : 'bg-white/5 hover:bg-white/10 text-zinc-200 border-white/10'
-                        }`}
-                      >
-                        Slot 3
-                      </button>
-                    </div>
-                  </div>
+                    <span>{tab.label}</span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                        isActive ? 'bg-zinc-950/20 text-zinc-950' : 'bg-white/10 text-zinc-400'
+                      }`}
+                    >
+                      {tab.count}
+                    </span>
+                  </button>
                 );
               })}
-
-              <button
-                onClick={() => gameRef.current.buyItem('kevlar_kit')}
-                className="p-3.5 rounded-2xl border bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-400/30 text-left flex items-center justify-between transition-colors cursor-pointer"
-              >
-                <div>
-                  <div className="text-[11px] text-emerald-300">[7] Suprimento</div>
-                  <div className="text-sm font-bold text-white">Colete 100 + Kit (+50 HP)</div>
-                </div>
-                <div className="text-sm font-bold text-amber-400">$650</div>
-              </button>
             </div>
 
-            <div className="flex justify-end">
+            {/* Grade de Armas da Aba Selecionada */}
+            <div className="flex-1 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-2.5 pr-1 mb-4">
+              {Object.values(WEAPON_CATALOG)
+                .filter((spec) => !spec.isMelee && spec.shopTab === shopTab)
+                .map((spec) => {
+                  const canAfford = hud.money >= spec.price;
+                  const inSlot1 = hud.loadout[1] === spec.id;
+                  const inSlot2 = hud.loadout[2] === spec.id;
+
+                  return (
+                    <div
+                      key={spec.id}
+                      className={`p-3.5 rounded-2xl border flex flex-col justify-between transition-colors ${
+                        inSlot1 || inSlot2
+                          ? 'bg-amber-400/10 border-amber-400/50'
+                          : canAfford
+                          ? 'bg-white/5 border-white/10 hover:border-white/20'
+                          : 'bg-white/[0.02] border-white/5 opacity-55'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2 mb-1.5">
+                          <div>
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                              <span className="text-[10px] text-zinc-400 uppercase tracking-wider">
+                                {spec.category}
+                              </span>
+                              <span
+                                className={`text-[9px] font-bold px-1.5 py-0.2 rounded uppercase ${
+                                  spec.factionTag === 'PM'
+                                    ? 'bg-sky-500/20 text-sky-300 border border-sky-400/30'
+                                    : spec.factionTag === 'BANDIDOS'
+                                    ? 'bg-rose-500/20 text-rose-300 border border-rose-400/30'
+                                    : 'bg-zinc-500/20 text-zinc-300 border border-zinc-400/30'
+                                }`}
+                              >
+                                {spec.factionTag}
+                              </span>
+                            </div>
+                            <div className="text-sm font-bold text-white">{spec.name}</div>
+                          </div>
+                          <span className="text-sm font-black text-amber-400 shrink-0">
+                            ${spec.price}
+                          </span>
+                        </div>
+
+                        {/* Silhueta Visual Vetorial da Arma */}
+                        <div className="h-9 my-1.5 px-3 rounded-xl bg-zinc-900/80 border border-white/5 flex items-center justify-between">
+                          <svg
+                            viewBox="0 0 120 32"
+                            className="w-28 h-7 text-zinc-200 fill-current"
+                            aria-hidden="true"
+                          >
+                            {spec.shopTab === 'pistols' && (
+                              <g>
+                                <rect x="24" y="6" width="52" height="8" rx="1.5" />
+                                <rect x="74" y="8" width="8" height="4" rx="1" className="text-zinc-400" />
+                                <path d="M26,14 L42,14 L36,28 L22,28 Z" />
+                                <rect x="42" y="14" width="11" height="5" rx="1" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                              </g>
+                            )}
+                            {spec.shopTab === 'shotguns' && (
+                              <g>
+                                <path d="M6,18 L28,12 L28,20 L8,25 Z" />
+                                <rect x="28" y="10" width="32" height="7" rx="1" />
+                                <rect x="60" y="10" width={spec.id === 'sawed_off' ? '34' : '52'} height="3.5" />
+                                <rect x="60" y="14.5" width={spec.id === 'sawed_off' ? '26' : '44'} height="3" className="text-amber-400/80" />
+                                <rect x="64" y="14" width="18" height="4.5" rx="1" />
+                              </g>
+                            )}
+                            {spec.shopTab === 'rifles' && (
+                              <g>
+                                <path d="M4,18 L24,11 L24,20 L6,24 Z" />
+                                <rect x="24" y="9" width="36" height="8" rx="1" />
+                                <path d="M28,17 L35,17 L31,27 L24,27 Z" />
+                                {spec.id === 'ak47' ? (
+                                  <path d="M46,17 L54,17 L59,29 L50,29 Z" className="text-amber-400/90" />
+                                ) : (
+                                  <rect x="45" y="17" width="8" height="11" rx="1" className="text-zinc-400" />
+                                )}
+                                <rect x="60" y="10" width="26" height="6" rx="1" />
+                                <rect x="86" y="11.5" width="28" height="2.8" />
+                                <rect x="106" y="8" width="3" height="4" />
+                              </g>
+                            )}
+                            {spec.shopTab === 'tactical' && (
+                              <g>
+                                <path d="M4,17 L24,11 L24,20 L6,23 Z" />
+                                <rect x="24" y="10" width="38" height="7" rx="1" />
+                                {spec.id === 'awp' && (
+                                  <rect x="30" y="4" width="28" height="4" rx="1" className="text-emerald-400" />
+                                )}
+                                <rect x="44" y="17" width="7" height="10" rx="1" />
+                                <rect x="62" y="11.5" width={spec.id === 'awp' ? '52' : '30'} height="3" />
+                              </g>
+                            )}
+                          </svg>
+
+                          <div className="text-right text-[10px] text-zinc-400 leading-tight">
+                            <div>
+                              Dano:{' '}
+                              <strong className="text-zinc-200">
+                                {spec.pellets ? `${spec.damage}x${spec.pellets}` : spec.damage}
+                              </strong>
+                            </div>
+                            <div>
+                              Pente:{' '}
+                              <strong className="text-zinc-200">
+                                {spec.clipSize}/{spec.reserveMax}
+                              </strong>
+                            </div>
+                          </div>
+                        </div>
+
+                        <p className="text-[11px] text-zinc-400 line-clamp-1 mb-2.5">
+                          {spec.description}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => gameRef.current.buyItem(spec.id, 1)}
+                          className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                            inSlot1
+                              ? 'bg-amber-400 text-zinc-950 border-amber-400'
+                              : 'bg-white/5 hover:bg-white/10 text-zinc-200 border-white/10'
+                          }`}
+                        >
+                          {inSlot1 ? 'Equipada Slot 2' : 'Equipar Slot 2'}
+                        </button>
+                        <button
+                          onClick={() => gameRef.current.buyItem(spec.id, 2)}
+                          className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                            inSlot2
+                              ? 'bg-amber-400 text-zinc-950 border-amber-400'
+                              : 'bg-white/5 hover:bg-white/10 text-zinc-200 border-white/10'
+                          }`}
+                        >
+                          {inSlot2 ? 'Equipada Slot 3' : 'Equipar Slot 3'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+
+            {/* Barra Inferior de Suprimento Tático + Fechar */}
+            <div className="border-t border-white/10 pt-3.5 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+              <button
+                onClick={() => gameRef.current.buyItem('kevlar_kit')}
+                className="flex-1 py-2.5 px-4 rounded-xl border bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-400/30 text-left flex items-center justify-between transition-colors cursor-pointer"
+              >
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-300">
+                    Suprimento Tático [Tecla 7]
+                  </div>
+                  <div className="text-xs font-bold text-white">
+                    Colete Balístico 100 + Kit Médico (+50 HP)
+                  </div>
+                </div>
+                <div className="text-sm font-black text-amber-400">$650</div>
+              </button>
+
               <button
                 onClick={() => gameRef.current.requestLock()}
-                className="px-6 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-bold text-xs uppercase tracking-wider cursor-pointer"
+                className="px-6 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-bold text-xs uppercase tracking-wider cursor-pointer shrink-0"
               >
-                Voltar ao Jogo [B]
+                Voltar ao Combate [B]
               </button>
             </div>
           </div>

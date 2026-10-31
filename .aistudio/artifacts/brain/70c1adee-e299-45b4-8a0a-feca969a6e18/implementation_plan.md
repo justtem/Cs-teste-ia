@@ -1,62 +1,103 @@
-# Plano de Implementação — Fase 2: Nova Anatomia 3D Low-Poly (CS 1.6) & 12 Variações (6 PM vs. 6 Bandidos)
+# Expansão de Mapas Brasileiros — Fase 1: Sistema de Mapas & Mapa 1 (VIELAS)
 
-## 1. Reforma Anatômica 3D (Fim do Tronco Cilíndrico)
-Substituiremos completamente os cilindros (`CylinderGeometry`) e formas redondas por uma **anatomia low-poly angulada e facetada inspirada em Counter-Strike 1.6**:
-- **Tronco Esculpido em Blocos Anatômicos**:
-  - **Peitoral Trapezoidal Superior**: Mais largo nos ombros e angulado no tórax (`BoxGeometry` composto por caixa torácica superior + placas peitorais chanfradas).
-  - **Abdômen / Cintura Definida**: Seção intermediária levemente mais estreita para criar silhueta atlética em V.
-  - **Pelve / Quadril Tático**: Base de ligação entre o abdômen e as coxas.
-  - **Pescoço Anatômico**: Coluna cervical prismática conectando o tórax ao crânio/mandíbula.
-- **Cabeça Facetada com Mandíbula e Orelhas**:
-  - Crânio superior + bloco de mandíbula/queixo angulado, nariz low-poly em cunha, sobrancelhas marcadas e orelhas laterais.
-- **Membros Articulados (Braços e Pernas)**:
-  - **Braços**: Deltoides/ombros estruturados, bíceps, antebraços angulados e mãos/luvas com empunhadura definida.
-  - **Pernas**: Coxas robustas, articulação de joelho destacada, panturrilhas/canelas afiladas e calçados esculpidos (coturnos táticos com solado tratorado na PM; tênis esportivo ou chinelo de tira nos Bandidos).
-- **Preservação de Hitboxes e Animações**:
-  - `torsoMesh` e `headMesh` continuarão sendo as raízes de colisão para raycast de tiros (corpo vs. headshot) e os pivôs `leftLeg`, `rightLeg`, `leftArm`, `rightArm` e `chestRig` manterão o ciclo de caminhada (`walkCycle`) intacto.
+Expansão do **CS 1.6 Tactical Arena** com uma arquitetura modular de mapas tridimensionais sob demanda (com limpeza de memória GPU ao trocar de cenário), Tela de Seleção de Mapas no menu principal e no menu de pausa, preservação integral do **Dust II** original e implementação completa do **Mapa 1 — VIELAS** (inspirado em comunidades e áreas residenciais de morros do Rio de Janeiro, com becos interligados, escadarias subíveis, lajes táticas, comércios, caixas d'água Azuis, antenas e fiação elétrica aérea).
+
+## User Review & Critical Decisions
+
+> [!IMPORTANT]
+> **Implementação Gradual (Um Mapa por Vez) e Decisões Confirmadas:**
+> Seguindo rigorosamente a regra de implementar, validar e testar **um mapa por vez**, esta **Fase 1** entrega a arquitetura modular de mapas, o **Dust II** preservado e o **Mapa 1 — VIELAS** 100% jogável e testado. Os mapas seguintes (*Orla*, *Centro*, *Distrito Industrial* e *Complexo*) serão construídos individualmente nas fases subsequentes após a validação de *Vielas*.
+
+- **Decisão Confirmada 1 — Seletor de Mapas Focado nos Mapas Concluídos**: A Tela de Seleção de Mapas exibirá apenas os mapas já implementados e validados nesta etapa (**Dust II** e **Vielas**), cada um com pré-visualização visual, descrição tática, ambientação e recomendação 5v5, sem criar mapas provisórios ou placeholders incompletos.
+- **Decisão Confirmada 2 — Verticalidade Real em Vielas (Escadarias e Lajes Jogáveis)**: O sistema de física e navegação suportará elevação contínua (`getGroundHeightAt(x, z, footY)`), permitindo que tanto o jogador quanto os bots subam pelas escadarias de concreto até as **lajes táticas elevadas (`+2.6m`)**, utilizem muretas como cobertura e combatam entre o nível térreo dos becos e o nível superior das lajes.
 
 ---
 
-## 2. Os 12 Modelos Completos (6 Polícia Militar + 6 Bandidos)
+## 1. Visão Geral & Conceito do Mapa 1 — VIELAS
 
-Cada bot do esquadrão receberá um modelo fixo e exclusivo (`variantIndex` de `0` a `5`), garantindo que os 5 integrantes da equipe exibam variações visuais distintas em todos os rounds.
-
-### Equipe 1 — Polícia Militar (PM) (6 Variações)
-1. **Variante 0 — `PM_Capitao` (Operador Padrão)**:
-   - Uniforme preto completo, colete balístico pesado com sigla `PM`, capacete balístico preto, balaclava preta, óculos de proteção espelhados e rádio no ombro.
-2. **Variante 1 — `BOPE_ZeroUm` (Incursão Tática Pesada)**:
-   - Uniforme preto carbono, colete pesado com ombreiras táticas reforçadas, balaclava caveira/preta, óculos de visão tática com lente âmbar, mochila de assalto compacta e rifle com ponteira tática.
-3. **Variante 2 — `CHOQUE_Tatico` (Controle e Escudo Balístico)**:
-   - Uniforme preto, capacete tático com **viseira balística translúcida abaixada**, protetores de canela/joelheiras pesadas, colete reforçado e coturnos altos.
-4. **Variante 3 — `GATE_Operador` (Especialista / Sniper Urbano)**:
-   - Uniforme preto fosco, **boina/boné tático preto para trás**, headset de comunicação com abafador nos ouvidos, óculos escuros táticos, rosto à mostra com barba curta e colete modular.
-5. **Variante 4 — `PM_Patrulha` (Patrulhamento Tático)**:
-   - Uniforme preto, **boné tático preto com brasão PM** virado para a frente, rosto sem balaclava, rádio comunicador no peito, cinto de guarnição completo e luvas meio-dedo.
-6. **Variante 5 — `PM_Incursao` (Breacher / Assalto)**:
-   - Uniforme preto com mangas táticas dobradas até o cotovelo (luvas pretas + relógio tático), balaclava preta, capacete FAST com trilhos laterais e bolsa de munição cruzada.
+- **O Que Faz**:
+  - Transforma o sistema de arena fixa em um motor de mapas dinâmico onde apenas o mapa ativo permanece na memória WebGL (descartando geometrias, materiais e texturas do mapa anterior ao alternar).
+  - Introduz o **Mapa 1 — VIELAS**, projetado especificamente para partidas competitivas **5v5 (Polícia Militar vs. Bandidos)** sem linha de visão direta entre os pontos de nascimento (CT Spawn e TR Spawn).
+- **Layout Competitivo 3-Rotas + Verticalidade (Estilo CS 1.6)**:
+  - **Base CT (Asfalto / Pé do Morro — Sul)**: Ponto de entrada da Polícia Militar em uma rua asfaltada na base da encosta, protegida por muros grafitados, viatura/obstáculos urbanos e guarita comercial.
+  - **Base TR (Largo do Topo / Caixa d'Água — Norte)**: Ponto de reunião dos Bandidos no patamar superior norte, cercado por casas de alvenaria de tijolo aparente, caixas d'água azuis e antenas.
+  - **Rota Oeste — Beco da Escadaria & Bar do Morro**: Corredor estreito entre fachadas de alvenaria e o *"Bar & Mercearia São Jorge"* (com toldo, balcão e engradados), conectado a uma escadaria de concreto que sobe para a **Laje Oeste**.
+  - **Rota Central — Largo da Caixa d'Água & Passarela**: Pátio aberto intermediário com muretas de concreto, escadaria central de ligação, postes de madeira com fiação aérea cruzando o céu e linhas de tiro cruzadas entre as lajes.
+  - **Rota Leste — Viela das Lajes & Oficina**: Corredor sinuoso com muros caiados, portões metálicos, lixeiras, pallets e rampa/escadaria lateral que dá acesso à **Laje Leste**, permitindo flanquear o meio ou a base adversária.
 
 ---
 
-### Equipe 2 — Bandidos Brasileiros (6 Variações)
-1. **Variante 0 — `RubroNegro_RJ` (Camisa Flamengo Listrada + Boné + Bermuda)**:
-   - Camisa clássica do Flamengo (listras horizontais vermelhas e pretas + `CRF`), corrente dourada grossa, bermuda jeans azul com canelas à mostra, tênis branco, máscara preta no queixo/boca e boné rubro-negro.
-2. **Variante 1 — `Falcao_Morro` (Camisa Flamengo + Calça Jeans + Balaclava)**:
-   - Camisa rubro-negra do Flamengo, calça jeans escura comprida com dobras na barra, balaclava preta fechada de assalto, mochila preta nas costas e tênis preto/vermelho.
-3. **Variante 2 — `Sombra_Vila` (Regata Branca + Bermuda + Chinelo + Corrente)**:
-   - Regata cavada branca deixando ombros e braços inteiros de pele à mostra, corrente dupla dourada no peito, bermuda tactel preta/vermelha, **chinelos nos pés** e boné preto virado para trás (sem máscara).
-4. **Variante 3 — `Relampago_ZS` (Camisa 2 Branca Rubro-Negra + Calça Esportiva + Bandana)**:
-   - Camisa de futebol branca com faixa rubro-negra no peito, calça esportiva de abrigo preta com listras laterais brancas, bandana vermelha cobrindo o rosto e relógio dourado.
-5. **Variante 4 — `Barao_Beco` (Regata Preta/Vermelha + Jeans + Balaclava + Corrente)**:
-   - Regata esportiva rubro-negra cavada, braços fortes à mostra com pulseira dourada, corrente de ouro com pingente, calça jeans surrada, balaclava preta e bolsa transversal.
-6. **Variante 5 — `Trovoada_Sul` (Camisa Esportiva Amarela/Verde Seleção + Bermuda + Boné)**:
-   - Camisa de futebol amarela com gola e mangas verdes, bermuda jeans clara, óculos juliet/esportivo espelhado na testa/olhos, boné escuro e mochila urbana.
+## 2. Experiência do Usuário & Identidade Visual
+
+- **Fluxo de Seleção de Mapas**:
+  - No **Menu Principal**, uma nova aba e seletor rápido permitem escolher entre **Dust II (Clássico Árido)** e **Vielas (Rio de Janeiro)** antes de clicar em *Iniciar Partida* ou escolher a equipe (*PM* / *Bandidos*).
+  - Cada cartão de mapa apresenta:
+    - **Arte de Pré-visualização Vetorial/Canvas** representando a arquitetura e a atmosfera do mapa.
+    - **Nome, Localização e Clima** (ex.: *Vielas — Morro Carioca · Fim de Tarde Quente*).
+    - **Descrição Tática e Rotas** + **Recomendação: 5v5 Competitivo**.
+  - No **Menu de Pausa (`ESC`)** e no rodapé da tela inicial, o jogador vê o mapa ativo e pode alternar de mapa a qualquer momento, reiniciando a partida 5v5 no novo cenário.
+- **Identidade Visual e Atmosfera de VIELAS**:
+  - **Iluminação e Céu**: Luz solar dourada de fim de tarde carioca (`HemisphereLight` azul-celeste/ocre + `DirectionalLight` quente com sombras suaves PCF), contrastando o tijolo cerâmico das construções com o azul das caixas d'água de fibra e o cinza das lajes de concreto.
+  - **Texturas Procedurais Brasileiras (`HTMLCanvasElement` sem dependências externas)**:
+    - Tijolo baiano / alvenaria aparente e reboco caiado (amarelo-ocre, verde-água, terracota e branco desgastado).
+    - Calçamento de paralelepípedo/concreto nas vielas e degraus demarcados nas escadarias.
+    - Placas comerciais em português (*"BAR DO ZÉ"*, *"MERCEARIA REAL"*, *"OFICINA IRMÃOS"*, *"PROIBIDO ESTACIONAR"*) e grafites urbanos geométricos nos muros.
+    - Detalhes tridimensionais compostos: caixas d'água cilíndricas azuis nos telhados, antenas parabólicas/TV, postes de concreto com emaranhado de fios pretos aéreos (`catenárias`), telhas onduladas de fibrocimento, portões de ferro e botijões/caixas.
 
 ---
 
-## 3. Arquivos que Serão Modificados
-- **`src/characterModels.ts`**:
-  - Substituição da geometria cilíndrica por blocos anatômicos low-poly angulados (tórax trapezoidal, abdômen, pelve, pescoço, mandíbula, ombros, braços e pernas articuladas).
-  - Adição das texturas procedurais extras (camisa Flamengo listrada, camisa Flamengo branca com faixa rubro-negra, camisa amarela/verde, regatas e variações de colete PM).
-  - Implementação das 6 variações de PM e 6 variações de Bandidos selecionadas por `variantIndex`.
-- **`src/standaloneHtmlGenerator.ts`**:
-  - Atualização do construtor de bots em `spawn5v5Round()` para usar o novo tronco anatômico em blocos (sem cilindros) e aplicar as variações visuais de PM e Bandidos.
+## 3. Decisões Técnicas & Equilíbrio Competitivo
+
+- **Decisão 1: Elevação Contínua para Escadarias e Lajes (`getGroundHeightAt`)**
+  - *Abordagem Escolhida*: Cada definição de mapa fornece zonas de piso elevado e rampas/escadarias (`ElevationZone[]`). A cada frame, a altura do chão sob o jogador e sob cada bot é calculada suavemente pelas rampas e lajes, enquanto o sistema `collidesWithWorld(x, z, radius, y)` respeita a altura atual (`y`) para permitir caminhar sobre lajes e bloquear passagem sob paredes sólidas.
+  - *Por quê*: Garante que o combate vertical nas escadarias e lajes de *Vielas* funcione com fluidez instantânea, sem travar o jogador nos degraus e permitindo que os bots também subam às lajes via waypoints 3D.
+- **Decisão 2: Gerenciamento de Ciclo de Vida da Cena (`MapSceneManager`)**
+  - *Abordagem Escolhida*: Todos os objetos 3D, luzes de ambiente específicas, colisores `AABBCollider[]`, zonas de elevação e waypoints de IA de um mapa são encapsulados em uma estrutura modular (`MapDefinition`). Ao trocar de mapa, o grupo do mapa anterior é removido da cena e suas geometrias/materiais específicos são liberados antes de construir o novo mapa.
+  - *Por quê*: Mantém uso enxuto de VRAM e 60 FPS estáveis mesmo em vídeos integrados.
+
+---
+
+## 4. Arquitetura Técnica & Diagrama do Sistema
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                        Menu Principal / Menu Pausa                         │
+│   ┌───────────────────────────┐          ┌─────────────────────────────┐   │
+│   │  Seletor de Mapas (UI)    │          │ Card de Mapa:               │   │
+│   │  • Dust II (Clássico 5v5) │─────────▶│ • Preview Visual + Ambiente │   │
+│   │  • Vielas (Rio de Janeiro)│          │ • Rotas, Descrição & 5v5    │   │
+│   └─────────────┬─────────────┘          └─────────────────────────────┘   │
+└─────────────────┼──────────────────────────────────────────────────────────┘
+                  │ seleciona activeMapId ('dust2' | 'vielas')
+                  ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                     Gerenciador Modular de Mapas 3D                        │
+│                 (src/mapModels.ts + src/App.tsx Game Loop)                 │
+├─────────────────────────────────────┬──────────────────────────────────────┤
+│        MAPA: DUST II (Preservado)   │       MAPA 1: VIELAS (Novo)          │
+│ • Texturas de arenito, tijolo e     │ • Casas de alvenaria, reboco colorido│
+│   caixas de madeira                 │   e tijolo baiano em 2 pavimentos    │
+│ • Portão Norte, Corredores e Meio   │ • 3 Escadarias subíveis + 2 Lajes    │
+│ • 14 Waypoints táticos no plano     │   táticas elevadas (+2.6m)           │
+│ • Spawns CT (Sul) / TR (Norte)      │ • Bar/Mercearia, placas em PT-BR,    │
+│                                     │   caixas d'água azuis, postes e fios │
+│                                     │ • 18 Waypoints 3D (becos + lajes)    │
+└─────────────────┬───────────────────┴──────────────────┬───────────────────┘
+                  │                                      │
+                  ▼                                      ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                Sistemas Integrados de Jogo (Preservados)                   │
+│ • Colisão 3D (AABB + Zonas de Rampa/Laje getGroundElevationAt)             │
+│ • IA 5v5 (Waypoints 3D, Whiskers de Desvio, LOS Real em 3D e Rajadas)      │
+│ • Arsenal Brasileiro (17 Armas, Loja [B], Inspeção [F] e Bot Takeover [E]) │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Modelo de Dados de Mapa (`MapDefinition`)
+- `id`: `'dust2' | 'vielas'`
+- `name`, `subtitle`, `environment`, `description`, `recommendedPlayers` (`'5v5 Competitivo (10 Jogadores)'`)
+- `skyColor`, `fogColor`, `fogDensity`, `sunColor`, `sunPosition`, `hemiSkyColor`, `hemiGroundColor`
+- `ctSpawns`: Array de coordenadas `[x, y, z]` protegidas na base da PM.
+- `trSpawns`: Array de coordenadas `[x, y, z]` protegidas na base dos Bandidos.
+- `waypoints`: Array de coordenadas `[x, y, z]` cobrindo becos térreos, largo central e lajes superiores para navegação dos bots.
+- `buildMap(scene, maxAniso, isSoftwareGl)`: Constrói a geometria 3D dentro de um `THREE.Group` dedicado e retorna `{ mapGroup, shootableMeshes, colliders, elevationZones, dispose }`.

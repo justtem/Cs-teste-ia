@@ -1,6 +1,6 @@
 {
-  "summary":  "Plano de implementacao da Fase 2: Reforma anatomica low-poly angulada estilo CS 1.6 (eliminando troncos cilindricos/redondos) e criacao completa dos 12 modelos variados (6 Policia Militar e 6 Bandidos Brasileiros), mantendo hitboxes, animacoes e sincronizacao no exportador HTML.",
-  "updatedAt":  "2026-10-31T02:58:24.756875920Z",
+  "summary":  "Plano de arquitetura e implementação gradual da Expansão de Mapas Brasileiros (Fase 1: Seletor de Mapas + Preservação do Dust II + Implementação Completa do Mapa 1 — Vielas com escadarias e lajes táticas jogáveis) para o CS 1.6 Tactical Arena.",
+  "updatedAt":  "2026-10-31T03:50:12.005222502Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

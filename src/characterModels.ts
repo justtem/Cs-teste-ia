@@ -714,24 +714,70 @@ function buildPMVariantModel(variantIndex: number, isSoftwareGl: boolean): Built
   const leftArm = createPMArm(true, -0.55);
   const rightArm = createPMArm(false, -0.75);
 
-  // 5. CARABINA TÁTICA PRISMÁTICA E MUZZLE FLASH
+  // 5. ARMAMENTO POLICIAL BRASILEIRO EM 3ª PESSOA POR VARIAÇÃO:
+  // v=0,3: IMBEL IA2 5.56mm (Trilho + Mira Red-Dot + Guarda-mão ventilado)
+  // v=1,4: FN FAL / ParaFAL 7.62mm (Cano longo + Quebra-chamas + Carregador reto 7.62 + Alça)
+  // v=2,5: CBC Pump Military 12G (Escopeta tática com tubo inferior e escudo térmico)
   const botGun = new THREE.Mesh(
-    createAngledPrismGeometry(0.08, 0.78, 0.09, 0.76, 0.13, 0, 0),
+    createAngledPrismGeometry(
+      0.075,
+      v === 1 || v === 4 ? 0.88 : 0.76,
+      0.085,
+      v === 1 || v === 4 ? 0.86 : 0.74,
+      0.11,
+      0,
+      0
+    ),
     gearBlackMat
   );
   botGun.position.set(0.32, 1.08, 0.50);
-  const gunMag = new THREE.Mesh(
-    createAngledPrismGeometry(0.055, 0.09, 0.055, 0.08, 0.20, 0, 0.03),
-    darkGreyMat
-  );
-  gunMag.position.set(0, -0.14, 0.05);
-  botGun.add(gunMag);
+
+  if (v === 2 || v === 5) {
+    // CBC Pump Military 12G nas mãos do Choque e Incursão
+    const tubeMag3P = new THREE.Mesh(
+      createAngledPrismGeometry(0.045, 0.58, 0.045, 0.58, 0.045, 0, 0),
+      darkGreyMat
+    );
+    tubeMag3P.position.set(0, -0.055, 0.10);
+    const pumpForend3P = new THREE.Mesh(
+      createAngledPrismGeometry(0.085, 0.24, 0.085, 0.24, 0.07, 0, 0),
+      gearBlackMat
+    );
+    pumpForend3P.position.set(0, -0.055, 0.08);
+    botGun.add(tubeMag3P, pumpForend3P);
+  } else if (v === 1 || v === 4) {
+    // IMBEL ParaFAL 7.62mm (Carregador reto + Quebra-chamas longo)
+    const falMag3P = new THREE.Mesh(
+      createAngledPrismGeometry(0.055, 0.11, 0.055, 0.10, 0.22, 0, 0.01),
+      darkGreyMat
+    );
+    falMag3P.position.set(0, -0.15, 0.04);
+    const flashHider3P = new THREE.Mesh(
+      createAngledPrismGeometry(0.04, 0.16, 0.04, 0.16, 0.04, 0, 0),
+      darkGreyMat
+    );
+    flashHider3P.position.set(0, 0.02, 0.46);
+    botGun.add(falMag3P, flashHider3P);
+  } else {
+    // IMBEL IA2 5.56mm (Mira Óptica Red-Dot + Guarda-mão + Carregador STANAG)
+    const ia2Optic3P = new THREE.Mesh(
+      createAngledPrismGeometry(0.06, 0.11, 0.065, 0.12, 0.065, 0, 0),
+      darkGreyMat
+    );
+    ia2Optic3P.position.set(0, 0.08, -0.02);
+    const gunMag = new THREE.Mesh(
+      createAngledPrismGeometry(0.055, 0.09, 0.055, 0.08, 0.21, 0, 0.04),
+      darkGreyMat
+    );
+    gunMag.position.set(0, -0.14, 0.05);
+    botGun.add(ia2Optic3P, gunMag);
+  }
 
   const muzzleFlash = new THREE.Mesh(
     new THREE.OctahedronGeometry(0.13, 0),
     new THREE.MeshBasicMaterial({ color: 0xfbbf24 })
   );
-  muzzleFlash.position.set(0.32, 1.08, 0.93);
+  muzzleFlash.position.set(0.32, 1.08, 0.96);
   muzzleFlash.visible = false;
 
   group.add(
@@ -1090,33 +1136,102 @@ function buildBandidoVariantModel(
   const leftArm = createBandidoArm(true, -0.55);
   const rightArm = createBandidoArm(false, -0.75);
 
-  // 5. FUZIL AK-47 PRISMÁTICO E MUZZLE FLASH
+  // 5. ARSENAL DOS BANDIDOS EM 3ª PESSOA POR VARIAÇÃO:
+  // v=0,3: AK-47 Clássica (Madeira avermelhada + Pente banana curvo)
+  // v=1,5: Heckler & Koch G3 7.62mm (Guarda-mão e coronha verde-oliva + Pente reto)
+  // v=2: Escopeta Calibre 12 Cano Curto (Cano duplo serrado + Punho de madeira)
+  // v=4: ParaFAL 7.62mm (Cano longo e carregador reto pesado)
   const gunWoodMat = new THREE.MeshStandardMaterial({
     color: 0x7c3f1c,
     roughness: 0.68,
   });
+  const gunOliveMat = new THREE.MeshStandardMaterial({
+    color: 0x2e3d2c,
+    roughness: 0.72,
+  });
+
+  const isSawedOff3P = v === 2;
+  const isG33P = v === 1 || v === 5;
+  const isParaFal3P = v === 4;
+
   const botGun = new THREE.Mesh(
-    createAngledPrismGeometry(0.08, 0.78, 0.09, 0.76, 0.13, 0, 0),
+    createAngledPrismGeometry(
+      isSawedOff3P ? 0.10 : 0.08,
+      isSawedOff3P ? 0.56 : isG33P || isParaFal3P ? 0.86 : 0.78,
+      isSawedOff3P ? 0.10 : 0.09,
+      isSawedOff3P ? 0.54 : isG33P || isParaFal3P ? 0.84 : 0.76,
+      0.12,
+      0,
+      0
+    ),
     darkFabricMat
   );
-  botGun.position.set(0.32, 1.08, 0.50);
-  const woodHandguard = new THREE.Mesh(
-    createAngledPrismGeometry(0.095, 0.32, 0.10, 0.30, 0.095, 0, 0),
-    gunWoodMat
-  );
-  woodHandguard.position.set(0, 0.01, 0.12);
-  const akMag = new THREE.Mesh(
-    createAngledPrismGeometry(0.055, 0.09, 0.055, 0.08, 0.22, 0, 0.06),
-    darkFabricMat
-  );
-  akMag.position.set(0, -0.15, 0.06);
-  botGun.add(woodHandguard, akMag);
+  botGun.position.set(0.32, 1.08, isSawedOff3P ? 0.42 : 0.50);
+
+  if (isSawedOff3P) {
+    // Escopeta Calibre 12 Cano Curto nas mãos do Sombra_Vila
+    const woodForend3P = new THREE.Mesh(
+      createAngledPrismGeometry(0.105, 0.24, 0.105, 0.22, 0.08, 0, 0),
+      gunWoodMat
+    );
+    woodForend3P.position.set(0, -0.02, 0.08);
+    const woodGrip3P = new THREE.Mesh(
+      createAngledPrismGeometry(0.07, 0.14, 0.07, 0.12, 0.14, 0, -0.04),
+      gunWoodMat
+    );
+    woodGrip3P.position.set(0, -0.09, -0.22);
+    botGun.add(woodForend3P, woodGrip3P);
+  } else if (isG33P) {
+    // HK G3A3 7.62mm (Guarda-mão e coronha verde-oliva + Pente reto)
+    const g3Forend3P = new THREE.Mesh(
+      createAngledPrismGeometry(0.09, 0.36, 0.095, 0.34, 0.09, 0, 0),
+      gunOliveMat
+    );
+    g3Forend3P.position.set(0, 0.0, 0.15);
+    const g3Stock3P = new THREE.Mesh(
+      createAngledPrismGeometry(0.075, 0.24, 0.08, 0.24, 0.11, 0, 0),
+      gunOliveMat
+    );
+    g3Stock3P.position.set(0, -0.02, -0.32);
+    const g3Mag3P = new THREE.Mesh(
+      createAngledPrismGeometry(0.055, 0.10, 0.055, 0.10, 0.21, 0, 0.01),
+      darkFabricMat
+    );
+    g3Mag3P.position.set(0, -0.15, 0.04);
+    botGun.add(g3Forend3P, g3Stock3P, g3Mag3P);
+  } else if (isParaFal3P) {
+    // ParaFAL 7.62mm
+    const falMag3P = new THREE.Mesh(
+      createAngledPrismGeometry(0.055, 0.10, 0.055, 0.10, 0.22, 0, 0.01),
+      darkFabricMat
+    );
+    falMag3P.position.set(0, -0.15, 0.04);
+    botGun.add(falMag3P);
+  } else {
+    // AK-47 Clássica (Guarda-mão e coronha em madeira + Carregador banana curvo)
+    const woodHandguard = new THREE.Mesh(
+      createAngledPrismGeometry(0.095, 0.32, 0.10, 0.30, 0.095, 0, 0),
+      gunWoodMat
+    );
+    woodHandguard.position.set(0, 0.01, 0.12);
+    const woodStock3P = new THREE.Mesh(
+      createAngledPrismGeometry(0.075, 0.22, 0.08, 0.22, 0.11, 0, 0),
+      gunWoodMat
+    );
+    woodStock3P.position.set(0, -0.03, -0.30);
+    const akMag = new THREE.Mesh(
+      createAngledPrismGeometry(0.055, 0.09, 0.055, 0.08, 0.22, 0, 0.07),
+      gunWoodMat
+    );
+    akMag.position.set(0, -0.15, 0.06);
+    botGun.add(woodHandguard, woodStock3P, akMag);
+  }
 
   const muzzleFlash = new THREE.Mesh(
     new THREE.OctahedronGeometry(0.13, 0),
     new THREE.MeshBasicMaterial({ color: 0xfbbf24 })
   );
-  muzzleFlash.position.set(0.32, 1.08, 0.93);
+  muzzleFlash.position.set(0.32, 1.08, 0.95);
   muzzleFlash.visible = false;
 
   group.add(

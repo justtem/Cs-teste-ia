@@ -47,15 +47,33 @@ export class TacticalAudioEngine {
     const now = ctx.currentTime;
     const pitchMap: Record<string, number> = {
       usp: 1.35,
+      glock17: 1.42,
+      glock19: 1.48,
+      pt92: 1.28,
+      th9: 1.32,
       deagle: 0.78,
+      sawed_off: 0.58,
       m3: 0.64,
+      cbc_pump: 0.68,
       mp5: 1.25,
       ak47: 0.9,
+      g3: 0.76,
+      parafal: 0.74,
+      ia2: 1.04,
       m4a1: 1.08,
       awp: 0.56,
     };
     const pitch = pitchMap[weaponId] ?? 1.0;
-    const duration = weaponId === 'awp' ? 0.36 : weaponId === 'm3' ? 0.28 : 0.16;
+    const isShotgun = weaponId === 'm3' || weaponId === 'cbc_pump' || weaponId === 'sawed_off';
+    const isHeavyBattleRifle = weaponId === 'parafal' || weaponId === 'g3';
+    const duration =
+      weaponId === 'awp'
+        ? 0.36
+        : isShotgun
+        ? 0.29
+        : isHeavyBattleRifle
+        ? 0.21
+        : 0.16;
 
     const bufferSize = Math.floor(ctx.sampleRate * duration);
     const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
@@ -73,7 +91,10 @@ export class TacticalAudioEngine {
     filter.Q.setValueAtTime(0.85, now);
 
     const noiseGain = ctx.createGain();
-    noiseGain.gain.setValueAtTime(weaponId === 'm3' ? 0.48 : 0.38, now);
+    noiseGain.gain.setValueAtTime(
+      isShotgun ? 0.5 : isHeavyBattleRifle ? 0.43 : 0.38,
+      now
+    );
     noiseGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
 
     noiseSource.connect(filter);
@@ -86,7 +107,10 @@ export class TacticalAudioEngine {
     osc.type = 'sawtooth';
     osc.frequency.setValueAtTime(165 * pitch, now);
     osc.frequency.exponentialRampToValueAtTime(28, now + 0.12);
-    oscGain.gain.setValueAtTime(weaponId === 'm3' ? 0.38 : 0.3, now);
+    oscGain.gain.setValueAtTime(
+      isShotgun ? 0.4 : isHeavyBattleRifle ? 0.35 : 0.3,
+      now
+    );
     oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
 
     osc.connect(oscGain);
@@ -94,8 +118,8 @@ export class TacticalAudioEngine {
     osc.start(now);
     osc.stop(now + 0.12);
 
-    // Som mecânico da telha Pump-Action ("chk-chk") após disparo da Shotgun M3
-    if (weaponId === 'm3') {
+    // Som mecânico da telha Pump-Action ("chk-chk") após disparo da Shotgun M3 ou CBC Pump Military
+    if (weaponId === 'm3' || weaponId === 'cbc_pump') {
       [0.24, 0.36].forEach((offset, idx) => {
         const rackOsc = ctx.createOscillator();
         const rackGain = ctx.createGain();
