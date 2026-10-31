@@ -1,73 +1,62 @@
-# Redesign Minimalista do HUD e Menus Táticos (Estilo CS2 / Valorant)
+# Plano de Implementação — Fase 2: Nova Anatomia 3D Low-Poly (CS 1.6) & 12 Variações (6 PM vs. 6 Bandidos)
 
-Reformulação visual completa do HUD de combate, contagem regressiva de início de round (Freeze Time) e menus (Pausa, Loja e Menu Inicial) para um design translúcido moderno (`backdrop-blur`), eliminando caixas pesadas, textos redundantes e botões extras durante a partida.
-
-## User Review & Critical Decisions
-
-> [!IMPORTANT]
-> As escolhas abaixo refletem suas respostas e o diagnóstico direto das 4 capturas de tela enviadas:
-
-- **Estilo Visual Confirmado**: HUD translúcido moderno e minimalista inspirado em CS2 / Valorant (`bg-black/45 backdrop-blur-md border border-white/10`), substituindo as caixas verdes/pretas pesadas de borda grossa.
-- **Topo Limpo em Combate**: Todos os botões utilitários extras (`[Q] Arma`, `Música: OFF`, seletor de faixa, `Mudo` e `</> index.html`) serão removidos da barra superior durante a partida. Controles de som ficarão acessíveis de forma limpa dentro do menu `ESC` e na tela inicial.
-- **Contagem de 10s (Freeze Time) Desobstruída**: A caixa preta central será removida. A contagem regressiva aparecerá apenas como um número grande e elegante flutuando logo abaixo do placar superior, deixando a mira e o centro da tela 100% livres.
-
----
-
-## 1. Overview & Core Concept
-
-- **O Que Muda**:
-  1. **Placar Superior Compacto**: Apenas uma cápsula translúcida fina no topo com placar `CT vs TR`, relógio do round e indicadores de jogadores vivos.
-  2. **Contagem de 10s Flutuante**: Número grande com brilho sutil abaixo do placar superior durante o preparo, sem fundo preto ou textos longos bloqueando a visão.
-  3. **HUD Inferior Unificado (Vida, Colete, Saldo e Munição)**: Substituição dos múltiplos blocos separados e faixas de dicas (`ESQUADRÃO TR · [Q] Alternar Arma...`) por dois painéis de vidro fosco compactos nos cantos inferiores.
-  4. **Menu de Pausa (`ESC`) e Loja (`B`) Modernizados**: Painéis em vidro escuro (`backdrop-blur-xl`), botões bem espaçados, tipografia limpa e hierarquia visual direta.
-- **Valor Principal**: Máxima visibilidade da arena 3D (baixa oclusão de tela) e acabamento visual digno de jogos competitivos modernos.
+## 1. Reforma Anatômica 3D (Fim do Tronco Cilíndrico)
+Substituiremos completamente os cilindros (`CylinderGeometry`) e formas redondas por uma **anatomia low-poly angulada e facetada inspirada em Counter-Strike 1.6**:
+- **Tronco Esculpido em Blocos Anatômicos**:
+  - **Peitoral Trapezoidal Superior**: Mais largo nos ombros e angulado no tórax (`BoxGeometry` composto por caixa torácica superior + placas peitorais chanfradas).
+  - **Abdômen / Cintura Definida**: Seção intermediária levemente mais estreita para criar silhueta atlética em V.
+  - **Pelve / Quadril Tático**: Base de ligação entre o abdômen e as coxas.
+  - **Pescoço Anatômico**: Coluna cervical prismática conectando o tórax ao crânio/mandíbula.
+- **Cabeça Facetada com Mandíbula e Orelhas**:
+  - Crânio superior + bloco de mandíbula/queixo angulado, nariz low-poly em cunha, sobrancelhas marcadas e orelhas laterais.
+- **Membros Articulados (Braços e Pernas)**:
+  - **Braços**: Deltoides/ombros estruturados, bíceps, antebraços angulados e mãos/luvas com empunhadura definida.
+  - **Pernas**: Coxas robustas, articulação de joelho destacada, panturrilhas/canelas afiladas e calçados esculpidos (coturnos táticos com solado tratorado na PM; tênis esportivo ou chinelo de tira nos Bandidos).
+- **Preservação de Hitboxes e Animações**:
+  - `torsoMesh` e `headMesh` continuarão sendo as raízes de colisão para raycast de tiros (corpo vs. headshot) e os pivôs `leftLeg`, `rightLeg`, `leftArm`, `rightArm` e `chestRig` manterão o ciclo de caminhada (`walkCycle`) intacto.
 
 ---
 
-## 2. User Experience & Visual Design
+## 2. Os 12 Modelos Completos (6 Polícia Militar + 6 Bandidos)
 
-- **Fluxo Visual em Jogo (HUD de Combate)**:
-  - **Topo Central**: Placar compacto dividido em 3 zonas: `CT (Vivos + Pontos)` | `Relógio 05:00` | `TR (Pontos + Vivos)`.
-  - **Abaixo do Placar (Durante os 10s de Preparo)**: Apenas o dígito grande flutuante (`10` até `1`) em âmbar/branco (ficando vermelho nos últimos 3 segundos com pulso suave).
-  - **Canto Inferior Esquerdo**: Uma única barra translúcida horizontal contendo `HP` (ícone + número grande `100`), `Colete` (ícone + número `100`) e `Saldo` (`$16000` em destaque dourado/esmeralda). A faixa de texto longo com instruções de teclas acima do HP será removida.
-  - **Canto Inferior Direito**: Contador de munição grande e limpo (`30 / 90`) acompanhado apenas dos 3 slots compactos (`1 Faca`, `2 Arma`, `3 Arma`) e um indicador discreto de abates (`Kills`), sem textos repetitivos como `[Q] TROCAR` ou `$ SALDO · [B] LOJA`.
-- **Identidade Visual & Tema**:
-  - *Superfícies*: Vidro escuro fosco (`bg-zinc-950/55 backdrop-blur-md`) com bordas finas translúcidas (`border-white/10`).
-  - *Cores de Facção e Acento*: Azul tático (`#3b82f6` / `#60a5fa`) para CT, vermelho carmesim (`#ef4444` / `#f87171`) para TR, âmbar competitivo (`#fbbf24`) para destaques e branco puro (`#ffffff`) para leitura instantânea de números.
-  - *Tipografia*: Números tabulares (`tabular-nums`) de alto contraste com peso `font-bold` / `font-black` para leitura periférica rápida sem precisar de rótulos extensos.
+Cada bot do esquadrão receberá um modelo fixo e exclusivo (`variantIndex` de `0` a `5`), garantindo que os 5 integrantes da equipe exibam variações visuais distintas em todos os rounds.
 
----
-
-## 3. Key Product Decisions & Trade-Offs
-
-- **Decisão 1: Remoção de Dicas Estáticas de Teclas no HUD**
-  - *Abordagem Escolhida*: Retirar avisos permanentes como `[Q] Alternar Arma · [E] Assumir Bot se Morrer` e `[B] LOJA DE ARMAS LIBERADA | MIRA LIVRE` da tela de jogo.
-  - *Por quê*: Jogadores em partida precisam de visão limpa; dicas de teclas já existem na aba Controles do menu inicial e o aviso de assumir bot (`[E]`) só aparece quando o jogador realmente morre.
-- **Decisão 2: Centralização de Áudio no Menu de Pausa (`ESC`)**
-  - *Abordagem Escolhida*: Mover os botões de Música e Mudo para uma linha discreta dentro do modal de Pausa (`ESC`) e manter o exportador `index.html` apenas no cabeçalho da tela inicial.
-  - *Por quê*: Elimina toda a segunda linha de botões do placar superior que poluía o topo da tela durante o tiroteio.
+### Equipe 1 — Polícia Militar (PM) (6 Variações)
+1. **Variante 0 — `PM_Capitao` (Operador Padrão)**:
+   - Uniforme preto completo, colete balístico pesado com sigla `PM`, capacete balístico preto, balaclava preta, óculos de proteção espelhados e rádio no ombro.
+2. **Variante 1 — `BOPE_ZeroUm` (Incursão Tática Pesada)**:
+   - Uniforme preto carbono, colete pesado com ombreiras táticas reforçadas, balaclava caveira/preta, óculos de visão tática com lente âmbar, mochila de assalto compacta e rifle com ponteira tática.
+3. **Variante 2 — `CHOQUE_Tatico` (Controle e Escudo Balístico)**:
+   - Uniforme preto, capacete tático com **viseira balística translúcida abaixada**, protetores de canela/joelheiras pesadas, colete reforçado e coturnos altos.
+4. **Variante 3 — `GATE_Operador` (Especialista / Sniper Urbano)**:
+   - Uniforme preto fosco, **boina/boné tático preto para trás**, headset de comunicação com abafador nos ouvidos, óculos escuros táticos, rosto à mostra com barba curta e colete modular.
+5. **Variante 4 — `PM_Patrulha` (Patrulhamento Tático)**:
+   - Uniforme preto, **boné tático preto com brasão PM** virado para a frente, rosto sem balaclava, rádio comunicador no peito, cinto de guarnição completo e luvas meio-dedo.
+6. **Variante 5 — `PM_Incursao` (Breacher / Assalto)**:
+   - Uniforme preto com mangas táticas dobradas até o cotovelo (luvas pretas + relógio tático), balaclava preta, capacete FAST com trilhos laterais e bolsa de munição cruzada.
 
 ---
 
-## 4. Technical Architecture & Data Strategy *(Technical Reference)*
+### Equipe 2 — Bandidos Brasileiros (6 Variações)
+1. **Variante 0 — `RubroNegro_RJ` (Camisa Flamengo Listrada + Boné + Bermuda)**:
+   - Camisa clássica do Flamengo (listras horizontais vermelhas e pretas + `CRF`), corrente dourada grossa, bermuda jeans azul com canelas à mostra, tênis branco, máscara preta no queixo/boca e boné rubro-negro.
+2. **Variante 1 — `Falcao_Morro` (Camisa Flamengo + Calça Jeans + Balaclava)**:
+   - Camisa rubro-negra do Flamengo, calça jeans escura comprida com dobras na barra, balaclava preta fechada de assalto, mochila preta nas costas e tênis preto/vermelho.
+3. **Variante 2 — `Sombra_Vila` (Regata Branca + Bermuda + Chinelo + Corrente)**:
+   - Regata cavada branca deixando ombros e braços inteiros de pele à mostra, corrente dupla dourada no peito, bermuda tactel preta/vermelha, **chinelos nos pés** e boné preto virado para trás (sem máscara).
+4. **Variante 3 — `Relampago_ZS` (Camisa 2 Branca Rubro-Negra + Calça Esportiva + Bandana)**:
+   - Camisa de futebol branca com faixa rubro-negra no peito, calça esportiva de abrigo preta com listras laterais brancas, bandana vermelha cobrindo o rosto e relógio dourado.
+5. **Variante 4 — `Barao_Beco` (Regata Preta/Vermelha + Jeans + Balaclava + Corrente)**:
+   - Regata esportiva rubro-negra cavada, braços fortes à mostra com pulseira dourada, corrente de ouro com pingente, calça jeans surrada, balaclava preta e bolsa transversal.
+6. **Variante 5 — `Trovoada_Sul` (Camisa Esportiva Amarela/Verde Seleção + Bermuda + Boné)**:
+   - Camisa de futebol amarela com gola e mangas verdes, bermuda jeans clara, óculos juliet/esportivo espelhado na testa/olhos, boné escuro e mochila urbana.
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        VIEWPORT 3D (Three.js)                           │
-├─────────────────────────────────────────────────────────────────────────┤
-│  [Topo Central] Placar Compacto Glass:  CT (5)  0  [05:00]  5  (5) TR   │
-│  [Flutuante 10s] Dígito Grande sem Caixa:            10                 │
-│                                                                         │
-│                                  +                                      │
-│                            (Mira Limpa)                                 │
-│                                                                         │
-│  [Inf. Esquerdo: Barra Única]         [Inf. Direito: Munição & Slots]   │
-│  ♥ 85   🛡 83   $16000                [1] [2 AK-47] [3]    30 / 90      │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+---
 
-- **Mapeamento de Componentes e Estados**:
-  - **Placar Superior**: Consome `hud.ctScore`, `hud.trScore`, `hud.ctAlive`, `hud.trAlive` e `hud.roundTimeSec` sem renderizar controles de música/download.
-  - **Contador Flutuante de Preparo**: Renderizado apenas quando `hud.isFreezeActive && !hud.isPlayerDead`, exibindo `Math.ceil(hud.freezeTimeSec)` com `drop-shadow` forte para contraste direto sobre o céu/cenário da Dust II.
-  - **Menu de Pausa (`gameMode === 'paused'`)**: Modal central em `backdrop-blur-xl` com botões diretos (`Continuar`, `Loja [B]`, `Reiniciar`, `Menu Inicial`), seletor rápido `CT / TR` e controles compactos de som (`Mudo [M]`, `Música [N]`).
-  - **Sincronização Standalone**: Atualização espelhada no gerador de arquivo único para que a versão baixável também apresente o novo HUD translúcido e a contagem flutuante.
+## 3. Arquivos que Serão Modificados
+- **`src/characterModels.ts`**:
+  - Substituição da geometria cilíndrica por blocos anatômicos low-poly angulados (tórax trapezoidal, abdômen, pelve, pescoço, mandíbula, ombros, braços e pernas articuladas).
+  - Adição das texturas procedurais extras (camisa Flamengo listrada, camisa Flamengo branca com faixa rubro-negra, camisa amarela/verde, regatas e variações de colete PM).
+  - Implementação das 6 variações de PM e 6 variações de Bandidos selecionadas por `variantIndex`.
+- **`src/standaloneHtmlGenerator.ts`**:
+  - Atualização do construtor de bots em `spawn5v5Round()` para usar o novo tronco anatômico em blocos (sem cilindros) e aplicar as variações visuais de PM e Bandidos.

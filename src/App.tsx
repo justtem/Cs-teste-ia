@@ -43,6 +43,7 @@ import {
   STANDALONE_HTML_SOURCE,
 } from './standaloneHtmlGenerator';
 import { MenuBackground } from './components/MenuBackground';
+import { createTeamCharacterModel } from './characterModels';
 
 type TeamSide = 'CT' | 'TR';
 
@@ -112,6 +113,8 @@ interface BotEntity {
   allyMarker: THREE.Mesh | null;
   bodyMat: THREE.MeshStandardMaterial;
   headMat: THREE.MeshStandardMaterial;
+  baseBodyColor: number;
+  baseHeadColor: number;
   muzzleFlash: THREE.Mesh;
   hp: number;
   maxHp: number;
@@ -168,19 +171,21 @@ const _rayDir = new THREE.Vector3();
 const _ndcCenter = new THREE.Vector2(0, 0);
 
 const CT_BOT_NAMES = [
-  'SEAL_ Maverick',
-  'GSG9_Jager',
-  'SAS_Soap',
-  'GIGN_Montagne',
-  'CT_Guardian',
+  'PM_Capitao',
+  'BOPE_ZeroUm',
+  'CHOQUE_Tatico',
+  'GATE_Operador',
+  'PM_Patrulha',
+  'PM_Incursao',
 ];
 
 const TR_BOT_NAMES = [
-  'Phoenix_T1',
-  'Leet_Krew',
-  'Arctic_Avenger',
-  'Guerilla_Wolf',
-  'Dust_Raider',
+  'RubroNegro_RJ',
+  'Falcao_Morro',
+  'Sombra_Vila',
+  'Relampago_ZS',
+  'Barao_Beco',
+  'Trovoada_Sul',
 ];
 
 const MUSIC_TRACK_LABELS: Record<MusicTrackId, string> = {
@@ -1154,82 +1159,25 @@ export default function App() {
         coords: [number, number][],
         names: string[]
       ) => {
-        const isCT = teamSide === 'CT';
         const isAllyToPlayer = teamSide === player.team;
 
         for (let i = 0; i < botCount; i++) {
-          const group = new THREE.Group();
-
-          const bodyMat = new THREE.MeshStandardMaterial({
-            color: isCT ? 0x1d4ed8 : 0xb91c1c,
-            roughness: 0.58,
-            metalness: 0.15,
-          });
-          const headMat = new THREE.MeshStandardMaterial({
-            color: isCT ? 0x3b82f6 : 0xef4444,
-            roughness: 0.42,
-            metalness: 0.1,
-          });
-          const darkMat = new THREE.MeshStandardMaterial({
-            color: 0x1f2421,
-            roughness: 0.8,
-          });
-
-          const leftLeg = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.65, 0.24), darkMat);
-          leftLeg.position.set(-0.15, 0.325, 0);
-          const rightLeg = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.65, 0.24), darkMat);
-          rightLeg.position.set(0.15, 0.325, 0);
-
-          const torsoMesh = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.38, 0.42, 0.92, 12),
-            bodyMat
-          );
-          torsoMesh.position.set(0, 1.05, 0);
-          torsoMesh.castShadow = !isSoftwareGl;
-
-          const chestRig = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.48, 0.52), darkMat);
-          chestRig.position.set(0, 1.12, 0);
-
-          const headMesh = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.44, 0.44), headMat);
-          headMesh.position.set(0, 1.76, 0);
-          headMesh.castShadow = !isSoftwareGl;
-
-          const visor = new THREE.Mesh(
-            new THREE.BoxGeometry(0.46, 0.12, 0.46),
-            new THREE.MeshBasicMaterial({ color: 0x111111 })
-          );
-          visor.position.set(0, 1.8, 0.02);
-
-          const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.62, 0.18), bodyMat);
-          leftArm.position.set(-0.48, 1.12, 0.15);
-          leftArm.rotation.x = -0.55;
-
-          const rightArm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.62, 0.18), bodyMat);
-          rightArm.position.set(0.48, 1.12, 0.22);
-          rightArm.rotation.x = -0.75;
-
-          const botGun = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.14, 0.75), darkMat);
-          botGun.position.set(0.38, 1.08, 0.52);
-
-          const muzzleFlash = new THREE.Mesh(
-            new THREE.SphereGeometry(0.12, 6, 6),
-            new THREE.MeshBasicMaterial({ color: 0xfbbf24 })
-          );
-          muzzleFlash.position.set(0.38, 1.08, 0.95);
-          muzzleFlash.visible = false;
-
-          group.add(
-            leftLeg,
-            rightLeg,
+          const built = createTeamCharacterModel(teamSide, i, isSoftwareGl);
+          const {
+            group,
+            headMesh,
             torsoMesh,
             chestRig,
-            headMesh,
-            visor,
+            leftLeg,
+            rightLeg,
             leftArm,
             rightArm,
-            botGun,
-            muzzleFlash
-          );
+            muzzleFlash,
+            bodyMat,
+            headMat,
+            baseBodyColor,
+            baseHeadColor,
+          } = built;
 
           // Marcador Verde sobre a cabeça dos 4 Bots Aliados para identificação imediata
           let allyMarker: THREE.Mesh | null = null;
@@ -1267,6 +1215,8 @@ export default function App() {
             allyMarker,
             bodyMat,
             headMat,
+            baseBodyColor,
+            baseHeadColor,
             muzzleFlash,
             hp: 100,
             maxHp: 100,
@@ -1309,18 +1259,18 @@ export default function App() {
 
       if (ct === 0) {
         winningTeam = 'TR';
-        winReason = 'ESQUADRÃO CONTRA-TERRORISTA ELIMINADO';
+        winReason = 'ESQUADRÃO DA PM ELIMINADO';
       } else if (tr === 0) {
         winningTeam = 'CT';
-        winReason = 'ESQUADRÃO TERRORISTA ELIMINADO';
+        winReason = 'BANDIDOS NEUTRALIZADOS';
       } else if (timeExpired) {
-        // Se o relógio de 5 minutos zerar: vence quem tiver mais vivos (ou CT no empate por defesa)
+        // Se o relógio de 5 minutos zerar: vence quem tiver mais vivos (ou PM no empate por defesa)
         if (ct >= tr) {
           winningTeam = 'CT';
-          winReason = 'TEMPO ESGOTADO (00:00) — DEFESA CT VENCEU!';
+          winReason = 'TEMPO ESGOTADO (00:00) — DEFESA PM VENCEU!';
         } else {
           winningTeam = 'TR';
-          winReason = 'TEMPO ESGOTADO (00:00) — MAIORIA TR VENCEU!';
+          winReason = 'TEMPO ESGOTADO (00:00) — BANDIDOS VENCERAM!';
         }
       }
 
@@ -1333,16 +1283,17 @@ export default function App() {
         const roundBonus = playerWon ? 2400 : 1400;
         player.money = Math.min(16000, player.money + roundBonus);
 
+        const teamLabel = winningTeam === 'CT' ? 'POLÍCIA MILITAR (PM)' : 'BANDIDOS';
         audioRef.current.playBuyOrRoundChime(playerWon);
         showBanner(
-          `EQUIPE ${winningTeam} VENCEU O ROUND ${player.round}! (${winReason}) +$${roundBonus}`,
+          `${teamLabel} VENCEU O ROUND ${player.round}! (${winReason}) +$${roundBonus}`,
           3.0
         );
 
         setTimeout(() => {
           player.round++;
           startNew5v5Round();
-          showBanner(`ROUND ${player.round} INICIADO — 5v5 (05:00)`, 2.2);
+          showBanner(`ROUND ${player.round} INICIADO — PM vs BANDIDOS`, 2.2);
         }, 2800);
       }
 
@@ -1545,7 +1496,12 @@ export default function App() {
             if (hitBot.team === player.team) {
               if (!hitFriendlyWarningShown) {
                 hitFriendlyWarningShown = true;
-                showBanner(`CUIDADO! ${hitBot.name} É SEU ALIADO (${player.team})!`, 1.2);
+                showBanner(
+                  `CUIDADO! ${hitBot.name} É SEU ALIADO (${
+                    player.team === 'CT' ? 'PM' : 'BANDIDOS'
+                  })!`,
+                  1.2
+                );
               }
               continue;
             }
@@ -1560,6 +1516,7 @@ export default function App() {
             hitBot.hp -= dmg;
             hitBot.hitFlashTimer = 0.14;
             hitBot.bodyMat.color.setHex(0xffffff);
+            hitBot.bodyMat.emissive.setHex(0x552222);
             hitBot.headMat.color.setHex(0xfde047);
 
             spawnImpactSparks(
@@ -1589,7 +1546,7 @@ export default function App() {
               const killLabel =
                 spec.isMelee && isHeavyKnifeStab ? `${spec.shortName} (Estocada)` : spec.shortName;
               pushKillfeed(
-                `Você (${player.team})`,
+                `Você (${player.team === 'CT' ? 'PM' : 'Bandidos'})`,
                 player.team,
                 hitBot.name,
                 hitBot.team,
@@ -2125,9 +2082,9 @@ export default function App() {
         if (bot.hitFlashTimer > 0) {
           bot.hitFlashTimer -= dt;
           if (bot.hitFlashTimer <= 0) {
-            const isCT = bot.team === 'CT';
-            bot.bodyMat.color.setHex(isCT ? 0x1d4ed8 : 0xb91c1c);
-            bot.headMat.color.setHex(isCT ? 0x3b82f6 : 0xef4444);
+            bot.bodyMat.color.setHex(bot.baseBodyColor);
+            bot.bodyMat.emissive.setHex(0x000000);
+            bot.headMat.color.setHex(bot.baseHeadColor);
           }
         }
 
@@ -2413,7 +2370,7 @@ export default function App() {
                     pushKillfeed(
                       bot.name,
                       bot.team,
-                      `Você (${player.team})`,
+                      `Você (${player.team === 'CT' ? 'PM' : 'Bandidos'})`,
                       player.team,
                       bot.team === 'CT' ? 'M4A1' : 'AK-47',
                       false
@@ -2422,7 +2379,7 @@ export default function App() {
                     const livingAlly = getFirstLivingAllyBot();
                     if (livingAlly) {
                       showBanner(
-                        `VOCÊ FOI ABATIDO! APERTE [E] PARA ASSUMIR O BOT ALIADO (${livingAlly.name})!`,
+                        `VOCÊ FOI ABATIDO! APERTE [E] PARA ASSUMIR O ALIADO (${livingAlly.name})!`,
                         4.0
                       );
                     }
@@ -2454,6 +2411,7 @@ export default function App() {
                   bestEnemyBot.hp -= isBotHS ? botDmg * 2 : botDmg;
                   bestEnemyBot.hitFlashTimer = 0.11;
                   bestEnemyBot.bodyMat.color.setHex(0xffffff);
+                  bestEnemyBot.bodyMat.emissive.setHex(0x552222);
                   spawnImpactSparks(botTargetCenter, new THREE.Vector3(0, 1, 0), 0xef4444);
 
                   if (bestEnemyBot.hp <= 0) {
@@ -2770,14 +2728,14 @@ export default function App() {
           HUD TRANSLÚCIDO MINIMALISTA (ESTILO CS2 / VALORANT)
           ======================================================================== */}
       <div className="fixed inset-0 pointer-events-none z-10 tabular-nums">
-        {/* Topo Central: Placar Compacto em Vidro Fosco (Sem botões extras) */}
+        {/* Topo Central: Placar Compacto em Vidro Fosco (PM vs Bandidos) */}
         <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-zinc-950/55 backdrop-blur-md border border-white/10 rounded-2xl px-5 py-2 shadow-xl">
-          {/* Lado CT (Azul) */}
+          {/* Lado PM (Polícia Militar) */}
           <div className="flex items-center gap-2.5">
             <span className="text-[11px] font-medium text-sky-300/80">
               {hud.ctAlive} vivos
             </span>
-            <span className="text-xs font-bold tracking-wider text-sky-400">CT</span>
+            <span className="text-xs font-bold tracking-wider text-sky-400">PM</span>
             <span className="bg-sky-500/20 border border-sky-400/30 rounded-lg px-2.5 py-0.5 text-sm font-black text-white">
               {hud.ctScore}
             </span>
@@ -2797,12 +2755,12 @@ export default function App() {
             </span>
           </div>
 
-          {/* Lado TR (Vermelho) */}
+          {/* Lado Bandidos */}
           <div className="flex items-center gap-2.5">
             <span className="bg-rose-500/20 border border-rose-400/30 rounded-lg px-2.5 py-0.5 text-sm font-black text-white">
               {hud.trScore}
             </span>
-            <span className="text-xs font-bold tracking-wider text-rose-400">TR</span>
+            <span className="text-xs font-bold tracking-wider text-rose-400">BANDIDOS</span>
             <span className="text-[11px] font-medium text-rose-300/80">
               {hud.trAlive} vivos
             </span>
@@ -3137,7 +3095,7 @@ export default function App() {
                       <div className="text-left">
                         <div>Jogar 5v5 Agora</div>
                         <div className="text-[11px] font-semibold text-zinc-800 normal-case">
-                          Esquadrão {hud.playerTeam === 'CT' ? 'Contra-Terrorista' : 'Terrorista'}
+                          Equipe: {hud.playerTeam === 'CT' ? 'Polícia Militar (PM)' : 'Bandidos'}
                         </div>
                       </div>
                     </div>
@@ -3150,14 +3108,14 @@ export default function App() {
                   >
                     <div className="flex items-center gap-3">
                       <Users className="w-4 h-4 text-amber-400" />
-                      <span>Escolher Time</span>
+                      <span>Escolher Equipe</span>
                     </div>
                     <span
                       className={`text-xs font-bold ${
                         hud.playerTeam === 'CT' ? 'text-sky-400' : 'text-rose-400'
                       }`}
                     >
-                      {hud.playerTeam === 'CT' ? 'CT (Azul)' : 'TR (Vermelho)'}
+                      {hud.playerTeam === 'CT' ? 'Polícia Militar (PM)' : 'Bandidos'}
                     </span>
                   </button>
 
@@ -3197,9 +3155,9 @@ export default function App() {
                     >
                       <ArrowLeft className="w-5 h-5" />
                     </button>
-                    <h2 className="text-lg font-bold text-white">Escolha seu Time</h2>
+                    <h2 className="text-lg font-bold text-white">Escolha sua Equipe</h2>
                   </div>
-                  <span className="text-xs text-zinc-400">5 vs 5</span>
+                  <span className="text-xs text-zinc-400">PM vs Bandidos (5v5)</span>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -3211,15 +3169,15 @@ export default function App() {
                         : 'bg-white/5 hover:bg-white/10 border-white/10'
                     }`}
                   >
-                    <div className="text-xs font-semibold text-sky-400 mb-1">Defesa Tática</div>
+                    <div className="text-xs font-semibold text-sky-400 mb-1">Força Policial Tática</div>
                     <div className="text-lg font-bold text-white mb-2">
-                      Contra-Terroristas
+                      Polícia Militar (PM)
                     </div>
                     <p className="text-xs text-zinc-300 mb-4">
-                      Unidade de resposta rápida com M4A1, USP .45 e defesa coordenada.
+                      Uniforme tático preto, colete balístico PM, capacete, óculos de proteção e coturnos.
                     </p>
                     <button className="w-full py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-zinc-950 font-bold text-xs cursor-pointer">
-                      Entrar como CT
+                      Jogar como PM
                     </button>
                   </div>
 
@@ -3231,13 +3189,13 @@ export default function App() {
                         : 'bg-white/5 hover:bg-white/10 border-white/10'
                     }`}
                   >
-                    <div className="text-xs font-semibold text-rose-400 mb-1">Força de Assalto</div>
-                    <div className="text-lg font-bold text-white mb-2">Terroristas</div>
+                    <div className="text-xs font-semibold text-rose-400 mb-1">Grupo Urbano</div>
+                    <div className="text-lg font-bold text-white mb-2">Bandidos</div>
                     <p className="text-xs text-zinc-300 mb-4">
-                      Unidade de impacto equipada com AK-47, Desert Eagle e avanço rápido.
+                      Camisa rubro-negra listrada do Flamengo, corrente dourada, bermuda jeans e boné.
                     </p>
                     <button className="w-full py-2.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-bold text-xs cursor-pointer">
-                      Entrar como TR
+                      Jogar como Bandido
                     </button>
                   </div>
                 </div>
@@ -3368,11 +3326,11 @@ export default function App() {
             </div>
             <h2 className="text-2xl font-black text-white mb-2">Jogo Pausado</h2>
             <div className="inline-flex items-center gap-3 bg-white/5 border border-white/10 rounded-full px-4 py-1 text-xs text-zinc-300 mb-6">
-              <span className="font-bold text-sky-400">CT {hud.ctScore}</span>
+              <span className="font-bold text-sky-400">PM {hud.ctScore}</span>
               <span>·</span>
               <span className="font-mono text-white">{formatRoundClock(hud.roundTimeSec)}</span>
               <span>·</span>
-              <span className="font-bold text-rose-400">{hud.trScore} TR</span>
+              <span className="font-bold text-rose-400">{hud.trScore} BANDIDOS</span>
             </div>
 
             <div className="flex flex-col gap-2.5 mb-5">
@@ -3407,13 +3365,13 @@ export default function App() {
                   onClick={() => gameRef.current.selectTeamAndStart('CT')}
                   className="py-2 px-3 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/30 text-sky-300 font-semibold text-xs transition-colors cursor-pointer"
                 >
-                  Time CT (Azul)
+                  Jogar como PM
                 </button>
                 <button
                   onClick={() => gameRef.current.selectTeamAndStart('TR')}
                   className="py-2 px-3 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/30 text-rose-300 font-semibold text-xs transition-colors cursor-pointer"
                 >
-                  Time TR (Vermelho)
+                  Jogar como Bandido
                 </button>
               </div>
             </div>

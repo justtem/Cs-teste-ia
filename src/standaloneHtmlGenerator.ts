@@ -409,7 +409,7 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
   <div id="hud">
     <div class="top-bar">
       <span class="ct-badge" id="hud-ct-alive">5 vivos</span>
-      <span id="hud-score">CT 0 · 0 TR</span>
+      <span id="hud-score">PM 0 · 0 Bandidos</span>
       <span class="timer-badge" id="hud-timer">05:00</span>
       <span class="tr-badge" id="hud-tr-alive">5 vivos</span>
     </div>
@@ -474,7 +474,7 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
 
       <div id="menu-view-main">
         <button class="menu-btn primary" id="start-game-btn">▶ JOGAR 5v5 COMPETITIVO (INICIAR)</button>
-        <button class="menu-btn" id="open-team-btn">🛡 ESCOLHER TIME (CONTRA-TERRORISTAS vs TERRORISTAS)</button>
+        <button class="menu-btn" id="open-team-btn">🛡 ESCOLHER TIME (POLÍCIA MILITAR vs BANDIDOS)</button>
         <button class="menu-btn" id="open-arsenal-btn">⚔ ARSENAL DE ARMAS & ESPECIFICAÇÕES</button>
         <button class="menu-btn" id="open-controls-btn">⌨ GUIA DE CONTROLES & TECLAS</button>
       </div>
@@ -486,12 +486,12 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
         </div>
         <div class="team-grid">
           <div class="team-card ct" id="join-ct-btn">
-            <h3>CONTRA-TERRORISTAS (CT)</h3>
-            <p style="font-size: 11px;">Defesa Azul · M4A1, USP e Kits Táticos</p>
+            <h3>POLÍCIA MILITAR (PM)</h3>
+            <p style="font-size: 11px;">Força Tática Preta · Colete Balístico PM, Capacete e M4A1</p>
           </div>
           <div class="team-card tr" id="join-tr-btn">
-            <h3>TERRORISTAS (TR)</h3>
-            <p style="font-size: 11px;">Assalto Vermelho · AK-47, Deagle e Flanqueamento</p>
+            <h3>BANDIDOS</h3>
+            <p style="font-size: 11px;">Assalto Urbano · Camisa Rubro-Negra, Corrente, Bermuda e AK-47</p>
           </div>
         </div>
         <button class="btn" id="back-to-menu-btn1" style="margin-top: 14px;">VOLTAR AO MENU</button>
@@ -728,6 +728,57 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
       tracers.push({ mesh, life: 0.085, maxLife: 0.085 });
     }
 
+    let cachedFlamengoTex = null;
+    let cachedPMVestTex = null;
+
+    function getFlamengoTex() {
+      if (cachedFlamengoTex) return cachedFlamengoTex;
+      const c = document.createElement('canvas');
+      c.width = 256; c.height = 256;
+      const ctx = c.getContext('2d');
+      const stripes = 8, sh = 256 / stripes;
+      for (let i = 0; i < stripes; i++) {
+        ctx.fillStyle = i % 2 === 0 ? '#d91c24' : '#121214';
+        ctx.fillRect(0, i * sh, 256, sh);
+      }
+      ctx.fillStyle = '#09090b';
+      ctx.fillRect(92, 0, 72, 16);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 14px monospace';
+      ctx.fillText('CRF', 74, 52);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      cachedFlamengoTex = tex;
+      return tex;
+    }
+
+    function getPMVestTex() {
+      if (cachedPMVestTex) return cachedPMVestTex;
+      const c = document.createElement('canvas');
+      c.width = 256; c.height = 256;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#111318';
+      ctx.fillRect(0, 0, 256, 256);
+      ctx.fillStyle = '#1c2026';
+      for (let y = 96; y <= 190; y += 22) ctx.fillRect(28, y, 200, 10);
+      ctx.fillStyle = '#090a0d';
+      ctx.fillRect(72, 26, 112, 42);
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(72, 26, 112, 42);
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = 'bold 26px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('PM', 128, 56);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      cachedPMVestTex = tex;
+      return tex;
+    }
+
+    const PM_NAMES = ['PM_Capitao', 'BOPE_ZeroUm', 'CHOQUE_Tatico', 'GATE_Operador', 'PM_Patrulha', 'PM_Incursao'];
+    const BANDIDO_NAMES = ['RubroNegro_RJ', 'Falcao_Morro', 'Sombra_Vila', 'Relampago_ZS', 'Barao_Beco', 'Trovoada_Sul'];
+
     function spawn5v5Round() {
       bots.forEach((b) => scene.remove(b.group));
       bots.length = 0;
@@ -748,22 +799,110 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
 
       const createTeamBots = (teamName, count, spawnList) => {
         for (let i = 0; i < count; i++) {
+          const v = i % 6;
           const group = new THREE.Group();
           const isCT = teamName === 'CT';
-          const bodyMat = new THREE.MeshStandardMaterial({ color: isCT ? 0x1d4ed8 : 0xb91c1c });
-          const headMat = new THREE.MeshStandardMaterial({ color: isCT ? 0x3b82f6 : 0xef4444 });
-          const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.45, 1.25, 12), bodyMat);
-          torso.position.y = 0.625;
-          const head = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.46, 0.46), headMat);
-          head.position.y = 1.52;
+          const skinColors = [0xc68652, 0x9c6438, 0xd4996a, 0x825029, 0xba7a48, 0xa86b3c];
+          const skinMat = new THREE.MeshStandardMaterial({ color: skinColors[v], roughness: 0.65 });
+          const darkGearMat = new THREE.MeshStandardMaterial({ color: 0x0b0d10, roughness: 0.45 });
+
+          const baseBodyColor = isCT ? 0x14171d : (v === 2 ? 0xf1f5f9 : v === 5 ? 0xfacc15 : 0xffffff);
+          const hasBalaclava = isCT ? (v !== 3 && v !== 4) : (v === 1 || v === 4);
+          const baseHeadColor = hasBalaclava ? 0x14161b : skinColors[v];
+
+          const bodyMat = new THREE.MeshStandardMaterial({
+            color: baseBodyColor,
+            map: (!isCT && (v === 0 || v === 1 || v === 3 || v === 4)) ? getFlamengoTex() : null,
+            roughness: 0.75
+          });
+          const headMat = new THREE.MeshStandardMaterial({ color: baseHeadColor, roughness: 0.68 });
+
+          // Pernas articuladas (sem cilindros)
+          const wearsShorts = !isCT && (v === 0 || v === 2 || v === 5);
+          const pantsMat = isCT ? bodyMat : new THREE.MeshStandardMaterial({ color: v === 2 ? 0x18181b : 0x1e3a5f, roughness: 0.85 });
+          [-0.15, 0.15].forEach((ox) => {
+            const leg = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.64, 0.21), wearsShorts ? skinMat : pantsMat);
+            leg.position.set(ox, 0.32, 0);
+            if (wearsShorts) {
+              const shorts = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.34, 0.25), pantsMat);
+              shorts.position.set(0, 0.15, 0);
+              leg.add(shorts);
+            }
+            const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.12, 0.29), isCT ? darkGearMat : new THREE.MeshStandardMaterial({ color: 0xf4f4f5 }));
+            shoe.position.set(0, -0.26, 0.04);
+            leg.add(shoe);
+            group.add(leg);
+          });
+
+          // Tronco anatômico low-poly angulado (Peitoral trapezoidal + Cintura + Quadril + Pescoço)
+          const torso = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.88, 0.31), bodyMat);
+          torso.position.y = 1.07;
+          const upperChest = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.42, 0.35), bodyMat);
+          upperChest.position.set(0, 0.19, 0.01);
+          const waist = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.24, 0.29), bodyMat);
+          waist.position.set(0, -0.12, 0);
+          const neck = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.16, 0.19), hasBalaclava ? headMat : skinMat);
+          neck.position.set(0, 0.48, 0);
+          torso.add(upperChest, waist, neck);
+
+          // Braços articulados
+          [-0.45, 0.45].forEach((ax, idx) => {
+            const arm = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.60, 0.17), isCT ? bodyMat : skinMat);
+            arm.position.set(ax, 1.14, idx === 0 ? 0.14 : 0.22);
+            arm.rotation.x = idx === 0 ? -0.55 : -0.75;
+            if (!isCT && v !== 2 && v !== 4) {
+              const sleeve = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.24, 0.22), bodyMat);
+              sleeve.position.set(0, 0.17, 0);
+              arm.add(sleeve);
+            }
+            group.add(arm);
+          });
+
+          // Cabeça facetada com mandíbula
+          const head = new THREE.Mesh(new THREE.BoxGeometry(0.39, 0.41, 0.41), headMat);
+          head.position.y = 1.76;
+          const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.33, 0.13, 0.35), headMat);
+          jaw.position.set(0, -0.17, 0.02);
+          head.add(jaw);
           group.add(torso, head);
+
+          if (isCT) {
+            const vest = new THREE.Mesh(
+              new THREE.BoxGeometry(0.64, 0.50, 0.44),
+              new THREE.MeshStandardMaterial({ color: 0xffffff, map: getPMVestTex(), roughness: 0.7 })
+            );
+            vest.position.y = 1.15;
+            const helmet = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.21, 0.47), darkGearMat);
+            helmet.position.set(0, 0.16, 0);
+            head.add(helmet);
+            group.add(vest);
+          } else {
+            const chain = new THREE.Mesh(
+              new THREE.BoxGeometry(0.28, 0.04, 0.36),
+              new THREE.MeshStandardMaterial({ color: 0xfbbf24, metalness: 0.85, roughness: 0.2 })
+            );
+            chain.position.y = 1.44;
+            if (v === 0 || v === 2 || v === 5) {
+              const cap = new THREE.Mesh(
+                new THREE.BoxGeometry(0.42, 0.15, 0.43),
+                new THREE.MeshStandardMaterial({ color: v === 0 ? 0xd91c24 : 0x141418, roughness: 0.75 })
+              );
+              cap.position.set(0, 0.16, 0);
+              const visor = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.04, 0.22), darkGearMat);
+              visor.position.set(0, 0.10, v === 2 ? -0.28 : 0.28);
+              head.add(cap, visor);
+            }
+            group.add(chain);
+          }
+
           const sp = spawnList[i % spawnList.length];
           group.position.set(sp[0], 0, sp[1]);
           scene.add(group);
           const wp = ARENA_WAYPOINTS[i % ARENA_WAYPOINTS.length];
+          const namePool = isCT ? PM_NAMES : BANDIDO_NAMES;
           const botObj = {
-            team: teamName, name: \`\${teamName}_Bot_\${i + 1}\`,
-            group, torso, head, bodyMat, headMat, hp: 100,
+            team: teamName, name: namePool[i % namePool.length],
+            group, torso, head, bodyMat, headMat, baseBodyColor, baseHeadColor, hp: 100,
             speed: 4.6 + Math.random() * 0.7,
             attackCooldown: 0.4 + Math.random() * 0.4,
             burstShotsLeft: 3, burstShotTimer: 0,
@@ -812,7 +951,7 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
         else player.trScore++;
         player.money = Math.min(16000, player.money + (winner === player.team ? 2400 : 1400));
         const banner = document.getElementById('center-banner');
-        banner.textContent = \`EQUIPE \${winner} VENCEU O ROUND!\`;
+        banner.textContent = \`\${winner === 'CT' ? 'POLÍCIA MILITAR (PM)' : 'BANDIDOS'} VENCEU O ROUND!\`;
         banner.style.opacity = '1';
         setTimeout(() => { banner.style.opacity = '0'; spawn5v5Round(); }, 2500);
       }
@@ -963,7 +1102,7 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
       for (let i = bots.length - 1; i >= 0; i--) {
         const bot = bots[i];
         if (!bot) continue;
-        bot.bodyMat.color.setHex(bot.team === 'CT' ? 0x1d4ed8 : 0xb91c1c);
+        bot.bodyMat.color.setHex(bot.baseBodyColor);
 
         let visibleTarget = null, visibleDist = Infinity;
         let hiddenTarget = null, hiddenDist = Infinity;
@@ -1099,7 +1238,7 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
       const trCount = bots.filter((b) => b.team === 'TR').length + (!player.isDead && player.team === 'TR' ? 1 : 0);
       document.getElementById('hud-ct-alive').textContent = \`\${ctCount} vivos\`;
       document.getElementById('hud-tr-alive').textContent = \`\${trCount} vivos\`;
-      document.getElementById('hud-score').textContent = \`CT \${player.ctScore} · \${player.trScore} TR\`;
+      document.getElementById('hud-score').textContent = \`PM \${player.ctScore} · \${player.trScore} Bandidos\`;
 
       const timerEl = document.getElementById('hud-timer');
       const freezeOverlay = document.getElementById('freeze-overlay');

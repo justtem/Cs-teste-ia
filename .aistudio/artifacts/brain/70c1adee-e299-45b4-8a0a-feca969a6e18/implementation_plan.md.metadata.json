@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan to redesign and declutter the in-game HUD, Freeze Time countdown, Pause Menu, Buy Menu, and Title Menu with a modern translucent CS2/Valorant aesthetic.",
-  "updatedAt":  "2026-10-31T02:20:08.344518466Z",
+  "summary":  "Plano de implementacao da Fase 2: Reforma anatomica low-poly angulada estilo CS 1.6 (eliminando troncos cilindricos/redondos) e criacao completa dos 12 modelos variados (6 Policia Militar e 6 Bandidos Brasileiros), mantendo hitboxes, animacoes e sincronizacao no exportador HTML.",
+  "updatedAt":  "2026-10-31T02:58:24.756875920Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
