@@ -1,103 +1,52 @@
-# Expansão de Mapas Brasileiros — Fase 1: Sistema de Mapas & Mapa 1 (VIELAS)
+# Plano de Implementação — Fase 4: Mapa 4 `Complexo` (Conjunto Habitacional & Passarelas — 110m × 110m)
 
-Expansão do **CS 1.6 Tactical Arena** com uma arquitetura modular de mapas tridimensionais sob demanda (com limpeza de memória GPU ao trocar de cenário), Tela de Seleção de Mapas no menu principal e no menu de pausa, preservação integral do **Dust II** original e implementação completa do **Mapa 1 — VIELAS** (inspirado em comunidades e áreas residenciais de morros do Rio de Janeiro, com becos interligados, escadarias subíveis, lajes táticas, comércios, caixas d'água Azuis, antenas e fiação elétrica aérea).
+## 1. Visão Geral & Direção de Arte (Fase 4)
+Seguindo o padrão estabelecido nas Fases 1 (`Vielas`), 2 (`Orla`) e 3 (`Centro`), o mapa **Complexo** será expandido de `76m × 76m` para **`110m × 110m`** (`x: -55m..+55m`, `z: -55m..+55m`) com volumetria **3D Low-Poly Estilizada** (inspirada na riqueza arquitetônica da **Imagem 1**) e **clareza competitiva 5v5** com demarcação visual dos **Bombsites A e B** (inspirada na **Imagem 2**):
 
-## User Review & Critical Decisions
-
-> [!IMPORTANT]
-> **Implementação Gradual (Um Mapa por Vez) e Decisões Confirmadas:**
-> Seguindo rigorosamente a regra de implementar, validar e testar **um mapa por vez**, esta **Fase 1** entrega a arquitetura modular de mapas, o **Dust II** preservado e o **Mapa 1 — VIELAS** 100% jogável e testado. Os mapas seguintes (*Orla*, *Centro*, *Distrito Industrial* e *Complexo*) serão construídos individualmente nas fases subsequentes após a validação de *Vielas*.
-
-- **Decisão Confirmada 1 — Seletor de Mapas Focado nos Mapas Concluídos**: A Tela de Seleção de Mapas exibirá apenas os mapas já implementados e validados nesta etapa (**Dust II** e **Vielas**), cada um com pré-visualização visual, descrição tática, ambientação e recomendação 5v5, sem criar mapas provisórios ou placeholders incompletos.
-- **Decisão Confirmada 2 — Verticalidade Real em Vielas (Escadarias e Lajes Jogáveis)**: O sistema de física e navegação suportará elevação contínua (`getGroundHeightAt(x, z, footY)`), permitindo que tanto o jogador quanto os bots subam pelas escadarias de concreto até as **lajes táticas elevadas (`+2.6m`)**, utilizem muretas como cobertura e combatam entre o nível térreo dos becos e o nível superior das lajes.
+- **Blocos Habitacionais Populares 3D (`addHousingBlock3D`)**:
+  - Edifícios residenciais estilo conjunto habitacional carioca (COHAB / Zona Norte) em ocre, terracota, azul-acinzentado e verde-musgo desbotado, equipados com **vigas aparentes de concreto em relevo 3D**, **sacadas populares gradeadas**, **aparelhos de ar-condicionado de janela**, **telhados de telha de fibrocimento com caibros aparentes**, **caixas d'água comunitárias azuis elevadas em castelos d'água** e **antenas parabólicas/tubulações**.
+- **Anel Perimetral Urbano 360° (Skyline do Conjunto)**:
+  - Fechamento visual em `±55m` com 14 blocos habitacionais e muros de tijolo aparente emoldurando toda a arena na câmera panorâmica do menu e no horizonte em 1ª pessoa.
 
 ---
 
-## 1. Visão Geral & Conceito do Mapa 1 — VIELAS
+## 2. Arquitetura Tática 5v5 (110m × 110m) e Bombsites A & B
 
-- **O Que Faz**:
-  - Transforma o sistema de arena fixa em um motor de mapas dinâmico onde apenas o mapa ativo permanece na memória WebGL (descartando geometrias, materiais e texturas do mapa anterior ao alternar).
-  - Introduz o **Mapa 1 — VIELAS**, projetado especificamente para partidas competitivas **5v5 (Polícia Militar vs. Bandidos)** sem linha de visão direta entre os pontos de nascimento (CT Spawn e TR Spawn).
-- **Layout Competitivo 3-Rotas + Verticalidade (Estilo CS 1.6)**:
-  - **Base CT (Asfalto / Pé do Morro — Sul)**: Ponto de entrada da Polícia Militar em uma rua asfaltada na base da encosta, protegida por muros grafitados, viatura/obstáculos urbanos e guarita comercial.
-  - **Base TR (Largo do Topo / Caixa d'Água — Norte)**: Ponto de reunião dos Bandidos no patamar superior norte, cercado por casas de alvenaria de tijolo aparente, caixas d'água azuis e antenas.
-  - **Rota Oeste — Beco da Escadaria & Bar do Morro**: Corredor estreito entre fachadas de alvenaria e o *"Bar & Mercearia São Jorge"* (com toldo, balcão e engradados), conectado a uma escadaria de concreto que sobe para a **Laje Oeste**.
-  - **Rota Central — Largo da Caixa d'Água & Passarela**: Pátio aberto intermediário com muretas de concreto, escadaria central de ligação, postes de madeira com fiação aérea cruzando o céu e linhas de tiro cruzadas entre as lajes.
-  - **Rota Leste — Viela das Lajes & Oficina**: Corredor sinuoso com muros caiados, portões metálicos, lixeiras, pallets e rampa/escadaria lateral que dá acesso à **Laje Leste**, permitindo flanquear o meio ou a base adversária.
+### Rota 1 (Oeste, `x = -54m..-15m`) — Beco Tático Oeste, Rua do Mercadinho & Lan House
+- **Beco Tático Extremo Oeste (`x = -46m..-36m`)**: Corredor rápido de flanco entre os blocos perimetrais e os **Blocos A-01 (Noroeste)** e **C-03 (Sudoeste)**, com caçambas de entulho, muretas de tijolo e pallets de madeira.
+- **Rua do Comércio Comunitário (`x = -23m..-15m`)**: Fachadas térreas vivas com portas de aço de enrolar, marquises de concreto e toldos para o **Mercadinho & Padaria do Complexo**, **Lan House & Bar do Pátio** e **Barbearia & Lanchonete**, além de passagem sob a ponte de ligação entre os Blocos A-01 e C-03.
 
----
+### Rota 2 (Meio, `x = -15m..+15m`) — **BOMBSITE A (Quadra Poliesportiva Central & Passarela Aérea com Mirante Coberto `+2.6m`)**
+- **Demarcação de Bombsite A**: Piso demarcado com faixa zebrada amarela/preta (`13m × 13m`) no centro da **Quadra Poliesportiva Comunitária** (`x = 0m, z = -4.0m`), acompanhada de traves de futsal 3D, tabelas de basquete, refletores e sinalização vertical **"→ BOMBSITE A · QUADRA & PASSARELA"**.
+- **Rede de Varandas e Passarela Aérea Central (`+2.6m`) com Mirante Coberto**:
+  - **2 Varandas Laterais Elevadas (`+2.6m`)** em `x = -12.5m` (Oeste) e `x = +12.5m` (Leste), acessíveis por **4 escadarias de concreto com guarda-corpos escalonados** (`ramp_south` e `ramp_north`).
+  - **Passarela Aérea Central (`+2.6m`)** interligando as duas varandas sobre a Quadra Poliesportiva, agora equipada com um **Mirante Central Coberto** (telhado metálico estruturado sobre pilares, guarda-corpos de aço intercalados para troca de tiro upper-vs-lower e placas táticas do **Bombsite A**).
 
-## 2. Experiência do Usuário & Identidade Visual
+### Rota 3 (Leste, `x = +15m..+54m`) — **BOMBSITE B (Pátio das Garagens Coletivas em Pilotis & Oficina Mecânica)**
+- **Blocos Residenciais Suspensos em Pilotis (`Bloco B-02` e `Bloco D-04`)**:
+  - Térreo aberto sustentado por **colunas de concreto armado (`y = 0..3.8m`)** permitindo combate interno sob os prédios e transição direta para o pátio leste.
+- **Demarcação de Bombsite B**:
+  - Localizado no **Pátio Central das Garagens em Pilotis & Oficina Coletiva** (`x = +27.5m, z = -4.0m`), com demarcação `12m × 12m` no piso + sinalização vertical **"← BOMBSITE B · GARAGENS EM PILOTIS"**.
+  - Cobertura tática composta por **furgão branco de entregas**, **carros estacionados**, **bancadas da Oficina Mecânica**, **pilhas de pneus**, **caixas de ferramentas** e **guarita da garagem**.
 
-- **Fluxo de Seleção de Mapas**:
-  - No **Menu Principal**, uma nova aba e seletor rápido permitem escolher entre **Dust II (Clássico Árido)** e **Vielas (Rio de Janeiro)** antes de clicar em *Iniciar Partida* ou escolher a equipe (*PM* / *Bandidos*).
-  - Cada cartão de mapa apresenta:
-    - **Arte de Pré-visualização Vetorial/Canvas** representando a arquitetura e a atmosfera do mapa.
-    - **Nome, Localização e Clima** (ex.: *Vielas — Morro Carioca · Fim de Tarde Quente*).
-    - **Descrição Tática e Rotas** + **Recomendação: 5v5 Competitivo**.
-  - No **Menu de Pausa (`ESC`)** e no rodapé da tela inicial, o jogador vê o mapa ativo e pode alternar de mapa a qualquer momento, reiniciando a partida 5v5 no novo cenário.
-- **Identidade Visual e Atmosfera de VIELAS**:
-  - **Iluminação e Céu**: Luz solar dourada de fim de tarde carioca (`HemisphereLight` azul-celeste/ocre + `DirectionalLight` quente com sombras suaves PCF), contrastando o tijolo cerâmico das construções com o azul das caixas d'água de fibra e o cinza das lajes de concreto.
-  - **Texturas Procedurais Brasileiras (`HTMLCanvasElement` sem dependências externas)**:
-    - Tijolo baiano / alvenaria aparente e reboco caiado (amarelo-ocre, verde-água, terracota e branco desgastado).
-    - Calçamento de paralelepípedo/concreto nas vielas e degraus demarcados nas escadarias.
-    - Placas comerciais em português (*"BAR DO ZÉ"*, *"MERCEARIA REAL"*, *"OFICINA IRMÃOS"*, *"PROIBIDO ESTACIONAR"*) e grafites urbanos geométricos nos muros.
-    - Detalhes tridimensionais compostos: caixas d'água cilíndricas azuis nos telhados, antenas parabólicas/TV, postes de concreto com emaranhado de fios pretos aéreos (`catenárias`), telhas onduladas de fibrocimento, portões de ferro e botijões/caixas.
+### Bases e Spawns Protegidos (`z = ±46.5m`)
+- **Base CT / Polícia Militar (`z = +46.5m`, Sul)** e **Base TR / Bandidos (`z = -46.5m`, Norte)** protegidas por terminais comunitários de alvenaria e guaritas para impedir linha de visão imediata no segundo zero do round.
+- **Malha de 38 Waypoints 3D**: Cobrindo o Beco Oeste, Rua do Mercadinho, Quadra Central (**Bombsite A**), as 4 escadarias e o Mirante da Passarela Aérea (`+2.6m`), além das Garagens em Pilotis e Oficina (**Bombsite B**).
 
 ---
 
-## 3. Decisões Técnicas & Equilíbrio Competitivo
-
-- **Decisão 1: Elevação Contínua para Escadarias e Lajes (`getGroundHeightAt`)**
-  - *Abordagem Escolhida*: Cada definição de mapa fornece zonas de piso elevado e rampas/escadarias (`ElevationZone[]`). A cada frame, a altura do chão sob o jogador e sob cada bot é calculada suavemente pelas rampas e lajes, enquanto o sistema `collidesWithWorld(x, z, radius, y)` respeita a altura atual (`y`) para permitir caminhar sobre lajes e bloquear passagem sob paredes sólidas.
-  - *Por quê*: Garante que o combate vertical nas escadarias e lajes de *Vielas* funcione com fluidez instantânea, sem travar o jogador nos degraus e permitindo que os bots também subam às lajes via waypoints 3D.
-- **Decisão 2: Gerenciamento de Ciclo de Vida da Cena (`MapSceneManager`)**
-  - *Abordagem Escolhida*: Todos os objetos 3D, luzes de ambiente específicas, colisores `AABBCollider[]`, zonas de elevação e waypoints de IA de um mapa são encapsulados em uma estrutura modular (`MapDefinition`). Ao trocar de mapa, o grupo do mapa anterior é removido da cena e suas geometrias/materiais específicos são liberados antes de construir o novo mapa.
-  - *Por quê*: Mantém uso enxuto de VRAM e 60 FPS estáveis mesmo em vídeos integrados.
+## 3. Arquivos que Serão Modificados
+1. **`/src/mapModels.ts`**:
+   - Atualizar metadados de `MAP_CATALOG.complexo` com a nova descrição `110m × 110m` e destaques táticos dos Bombsites A e B.
+   - Substituir `buildComplexoArena` pela versão expandida `110m × 110m` com `addHousingBlock3D` (sacadas 3D, vigas aparentes, caixas d'água e telhados estruturados), Quadra Poliesportiva completa (**Bombsite A**), Passarela Aérea com Mirante Coberto (`+2.6m`), Garagens em Pilotis & Oficina (**Bombsite B**) e 38 waypoints.
+2. **`/src/App.tsx`**:
+   - Definir `activeMapId: 'complexo'` e `player.mapId: 'complexo'` como mapa inicial padrão para inspeção imediata da Fase 4.
 
 ---
 
-## 4. Arquitetura Técnica & Diagrama do Sistema
-
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                        Menu Principal / Menu Pausa                         │
-│   ┌───────────────────────────┐          ┌─────────────────────────────┐   │
-│   │  Seletor de Mapas (UI)    │          │ Card de Mapa:               │   │
-│   │  • Dust II (Clássico 5v5) │─────────▶│ • Preview Visual + Ambiente │   │
-│   │  • Vielas (Rio de Janeiro)│          │ • Rotas, Descrição & 5v5    │   │
-│   └─────────────┬─────────────┘          └─────────────────────────────┘   │
-└─────────────────┼──────────────────────────────────────────────────────────┘
-                  │ seleciona activeMapId ('dust2' | 'vielas')
-                  ▼
-┌────────────────────────────────────────────────────────────────────────────┐
-│                     Gerenciador Modular de Mapas 3D                        │
-│                 (src/mapModels.ts + src/App.tsx Game Loop)                 │
-├─────────────────────────────────────┬──────────────────────────────────────┤
-│        MAPA: DUST II (Preservado)   │       MAPA 1: VIELAS (Novo)          │
-│ • Texturas de arenito, tijolo e     │ • Casas de alvenaria, reboco colorido│
-│   caixas de madeira                 │   e tijolo baiano em 2 pavimentos    │
-│ • Portão Norte, Corredores e Meio   │ • 3 Escadarias subíveis + 2 Lajes    │
-│ • 14 Waypoints táticos no plano     │   táticas elevadas (+2.6m)           │
-│ • Spawns CT (Sul) / TR (Norte)      │ • Bar/Mercearia, placas em PT-BR,    │
-│                                     │   caixas d'água azuis, postes e fios │
-│                                     │ • 18 Waypoints 3D (becos + lajes)    │
-└─────────────────┬───────────────────┴──────────────────┬───────────────────┘
-                  │                                      │
-                  ▼                                      ▼
-┌────────────────────────────────────────────────────────────────────────────┐
-│                Sistemas Integrados de Jogo (Preservados)                   │
-│ • Colisão 3D (AABB + Zonas de Rampa/Laje getGroundElevationAt)             │
-│ • IA 5v5 (Waypoints 3D, Whiskers de Desvio, LOS Real em 3D e Rajadas)      │
-│ • Arsenal Brasileiro (17 Armas, Loja [B], Inspeção [F] e Bot Takeover [E]) │
-└────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Modelo de Dados de Mapa (`MapDefinition`)
-- `id`: `'dust2' | 'vielas'`
-- `name`, `subtitle`, `environment`, `description`, `recommendedPlayers` (`'5v5 Competitivo (10 Jogadores)'`)
-- `skyColor`, `fogColor`, `fogDensity`, `sunColor`, `sunPosition`, `hemiSkyColor`, `hemiGroundColor`
-- `ctSpawns`: Array de coordenadas `[x, y, z]` protegidas na base da PM.
-- `trSpawns`: Array de coordenadas `[x, y, z]` protegidas na base dos Bandidos.
-- `waypoints`: Array de coordenadas `[x, y, z]` cobrindo becos térreos, largo central e lajes superiores para navegação dos bots.
-- `buildMap(scene, maxAniso, isSoftwareGl)`: Constrói a geometria 3D dentro de um `THREE.Group` dedicado e retorna `{ mapGroup, shootableMeshes, colliders, elevationZones, dispose }`.
+## 4. Status do Roteiro Geral de 5 Fases
+1. **FASE 1 & 1.5 — MAPA 1: VIELAS (110m × 110m)** [CONCLUÍDO]
+2. **FASE 2 — MAPA 2: ORLA (110m × 110m)** [CONCLUÍDO]
+3. **FASE 3 — MAPA 3: CENTRO (110m × 110m)** [CONCLUÍDO]
+4. **FASE 4 — MAPA 4: COMPLEXO (110m × 110m)** [CONCLUÍDO]
+5. **FASE 5 — MAPA 5: DUST II (110m × 110m)**

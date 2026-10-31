@@ -367,7 +367,7 @@ export default function App() {
       mapId: 'complexo' as MapId,
       team: 'CT' as TeamSide,
       isDead: false,
-      pos: new THREE.Vector3(0, 1.72, 24.5),
+      pos: new THREE.Vector3(0, 1.72, 47.0),
       vel: new THREE.Vector3(0, 0, 0),
       yaw: 0,
       pitch: 0,
@@ -1220,10 +1220,10 @@ export default function App() {
       sunLight.position.set(32, 42, 26);
       sunLight.castShadow = !isSoftwareGl;
       sunLight.shadow.mapSize.set(1024, 1024);
-      sunLight.shadow.camera.left = -38;
-      sunLight.shadow.camera.right = 38;
-      sunLight.shadow.camera.top = 38;
-      sunLight.shadow.camera.bottom = -38;
+      sunLight.shadow.camera.left = -62;
+      sunLight.shadow.camera.right = 62;
+      sunLight.shadow.camera.top = 62;
+      sunLight.shadow.camera.bottom = -62;
       sunLight.shadow.bias = -0.0005;
       scene.add(sunLight);
 
@@ -1277,13 +1277,15 @@ export default function App() {
       }
 
       if (gameRef.current.gameMode === 'title') {
-        titleOrbitAngle += dt * 0.22;
+        titleOrbitAngle += dt * 0.12;
+        const orbitRadius = 72;
+        const orbitHeight = 48;
         camera.position.set(
-          Math.sin(titleOrbitAngle) * 22,
-          9.5 + Math.sin(titleOrbitAngle * 2) * 1.2,
-          Math.cos(titleOrbitAngle) * 22
+          Math.sin(titleOrbitAngle) * orbitRadius,
+          orbitHeight,
+          Math.cos(titleOrbitAngle) * orbitRadius
         );
-        camera.lookAt(0, 1.5, -4);
+        camera.lookAt(0, 3, 0);
         if (weaponGroup) weaponGroup.visible = false;
         return;
       }
