@@ -1,0 +1,6 @@
+{
+  "name": "CS 1.6 Tactical Arena — Dust II WebGL",
+  "description": "Minijogo FPS 3D inspirado em Counter-Strike 1.6 (Dust II) com Three.js procedural, áudio sintético Web Audio API, loja de armas e exportação em arquivo único index.html.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
