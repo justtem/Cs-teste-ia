@@ -1,52 +1,113 @@
-# Plano de Implementação — Fase 4: Mapa 4 `Complexo` (Conjunto Habitacional & Passarelas — 110m × 110m)
+# Otimização do Blackboard Tático: Compartilhamento Estrito de Percepções (Janela de 3s) e Pruning Periódico
 
-## 1. Visão Geral & Direção de Arte (Fase 4)
-Seguindo o padrão estabelecido nas Fases 1 (`Vielas`), 2 (`Orla`) e 3 (`Centro`), o mapa **Complexo** será expandido de `76m × 76m` para **`110m × 110m`** (`x: -55m..+55m`, `z: -55m..+55m`) com volumetria **3D Low-Poly Estilizada** (inspirada na riqueza arquitetônica da **Imagem 1**) e **clareza competitiva 5v5** com demarcação visual dos **Bombsites A e B** (inspirada na **Imagem 2**):
+## 1. Visão Geral da Mudança
 
-- **Blocos Habitacionais Populares 3D (`addHousingBlock3D`)**:
-  - Edifícios residenciais estilo conjunto habitacional carioca (COHAB / Zona Norte) em ocre, terracota, azul-acinzentado e verde-musgo desbotado, equipados com **vigas aparentes de concreto em relevo 3D**, **sacadas populares gradeadas**, **aparelhos de ar-condicionado de janela**, **telhados de telha de fibrocimento com caibros aparentes**, **caixas d'água comunitárias azuis elevadas em castelos d'água** e **antenas parabólicas/tubulações**.
-- **Anel Perimetral Urbano 360° (Skyline do Conjunto)**:
-  - Fechamento visual em `±55m` com 14 blocos habitacionais e muros de tijolo aparente emoldurando toda a arena na câmera panorâmica do menu e no horizonte em 1ª pessoa.
+Atualmente, o quadro tático compartilhado (`TeamBlackboard.knownEnemies`) retém registros visuais por períodos longos (6.5s a 12.5s) e executa loops de varredura a cada frame (60 Hz) em todos os bots e mapas de percepção. Além disso, combatentes eliminados (jogadores e bots) permanecem nos registros de inteligência até o decaimento por tempo, induzindo cálculos desnecessários e comportamento tático irrealista.
 
----
-
-## 2. Arquitetura Tática 5v5 (110m × 110m) e Bombsites A & B
-
-### Rota 1 (Oeste, `x = -54m..-15m`) — Beco Tático Oeste, Rua do Mercadinho & Lan House
-- **Beco Tático Extremo Oeste (`x = -46m..-36m`)**: Corredor rápido de flanco entre os blocos perimetrais e os **Blocos A-01 (Noroeste)** e **C-03 (Sudoeste)**, com caçambas de entulho, muretas de tijolo e pallets de madeira.
-- **Rua do Comércio Comunitário (`x = -23m..-15m`)**: Fachadas térreas vivas com portas de aço de enrolar, marquises de concreto e toldos para o **Mercadinho & Padaria do Complexo**, **Lan House & Bar do Pátio** e **Barbearia & Lanchonete**, além de passagem sob a ponte de ligação entre os Blocos A-01 e C-03.
-
-### Rota 2 (Meio, `x = -15m..+15m`) — **BOMBSITE A (Quadra Poliesportiva Central & Passarela Aérea com Mirante Coberto `+2.6m`)**
-- **Demarcação de Bombsite A**: Piso demarcado com faixa zebrada amarela/preta (`13m × 13m`) no centro da **Quadra Poliesportiva Comunitária** (`x = 0m, z = -4.0m`), acompanhada de traves de futsal 3D, tabelas de basquete, refletores e sinalização vertical **"→ BOMBSITE A · QUADRA & PASSARELA"**.
-- **Rede de Varandas e Passarela Aérea Central (`+2.6m`) com Mirante Coberto**:
-  - **2 Varandas Laterais Elevadas (`+2.6m`)** em `x = -12.5m` (Oeste) e `x = +12.5m` (Leste), acessíveis por **4 escadarias de concreto com guarda-corpos escalonados** (`ramp_south` e `ramp_north`).
-  - **Passarela Aérea Central (`+2.6m`)** interligando as duas varandas sobre a Quadra Poliesportiva, agora equipada com um **Mirante Central Coberto** (telhado metálico estruturado sobre pilares, guarda-corpos de aço intercalados para troca de tiro upper-vs-lower e placas táticas do **Bombsite A**).
-
-### Rota 3 (Leste, `x = +15m..+54m`) — **BOMBSITE B (Pátio das Garagens Coletivas em Pilotis & Oficina Mecânica)**
-- **Blocos Residenciais Suspensos em Pilotis (`Bloco B-02` e `Bloco D-04`)**:
-  - Térreo aberto sustentado por **colunas de concreto armado (`y = 0..3.8m`)** permitindo combate interno sob os prédios e transição direta para o pátio leste.
-- **Demarcação de Bombsite B**:
-  - Localizado no **Pátio Central das Garagens em Pilotis & Oficina Coletiva** (`x = +27.5m, z = -4.0m`), com demarcação `12m × 12m` no piso + sinalização vertical **"← BOMBSITE B · GARAGENS EM PILOTIS"**.
-  - Cobertura tática composta por **furgão branco de entregas**, **carros estacionados**, **bancadas da Oficina Mecânica**, **pilhas de pneus**, **caixas de ferramentas** e **guarita da garagem**.
-
-### Bases e Spawns Protegidos (`z = ±46.5m`)
-- **Base CT / Polícia Militar (`z = +46.5m`, Sul)** e **Base TR / Bandidos (`z = -46.5m`, Norte)** protegidas por terminais comunitários de alvenaria e guaritas para impedir linha de visão imediata no segundo zero do round.
-- **Malha de 38 Waypoints 3D**: Cobrindo o Beco Oeste, Rua do Mercadinho, Quadra Central (**Bombsite A**), as 4 escadarias e o Mirante da Passarela Aérea (`+2.6m`), além das Garagens em Pilotis e Oficina (**Bombsite B**).
+Esta atualização otimiza o ciclo de vida das percepções compartilhadas da equipe com três pilares:
+1. **Janela Estrita de Percepção (3.0 segundos)**: Bots só compartilham e reagem a avistamentos de adversários ocorridos nos últimos 3.0 segundos.
+2. **Purga Imediata de Combatentes Eliminados**: No momento exato da eliminação de qualquer combatente (jogador ou bot), seu identificador é removido imediatamente de todos os blackboards de equipe (`CT` e `TR`).
+3. **Pruning Periódico a Cada 0.2s + Filtro Estrito na Consulta**: Substituição da limpeza por frame por um ciclo de poda leve a cada 200ms acumulados, combinado com filtro instantâneo de `<= 3.0s` e comparação de distâncias quadradas (`distanceToSquared`) durante as consultas.
 
 ---
 
-## 3. Arquivos que Serão Modificados
-1. **`/src/mapModels.ts`**:
-   - Atualizar metadados de `MAP_CATALOG.complexo` com a nova descrição `110m × 110m` e destaques táticos dos Bombsites A e B.
-   - Substituir `buildComplexoArena` pela versão expandida `110m × 110m` com `addHousingBlock3D` (sacadas 3D, vigas aparentes, caixas d'água e telhados estruturados), Quadra Poliesportiva completa (**Bombsite A**), Passarela Aérea com Mirante Coberto (`+2.6m`), Garagens em Pilotis & Oficina (**Bombsite B**) e 38 waypoints.
-2. **`/src/App.tsx`**:
-   - Definir `activeMapId: 'complexo'` e `player.mapId: 'complexo'` como mapa inicial padrão para inspeção imediata da Fase 4.
+## 2. Arquitetura e Fluxo de Dados
+
+```
++-----------------------------------------------------------------------------------+
+|                        CICLO DO BLACKBOARD TÁTICO (PER-FRAME)                     |
+|                                                                                   |
+|  Frame Tick (dt)                                                                  |
+|    |                                                                              |
+|    +--> matchBlackboard.elapsedTime += dt                                         |
+|    |                                                                              |
+|    +--> blackboardPruneTimer += dt                                                |
+|    |    if (blackboardPruneTimer >= 0.20s):                                       |
+|    |        pruneExpiredBlackboardIntel(matchBB, maxAge = 3.0s)                  |
+|    |        blackboardPruneTimer = 0                                              |
+|                                                                                   |
++-----------------------------------------------------------------------------------+
+                                         |
+                                         v
++-----------------------------------------------------------------------------------+
+|                   REGISTRO DE VISÃO & CONSULTA DOS BOTS SEM LOS                  |
+|                                                                                   |
+|  [Ao Avistar Inimigo]:                                                            |
+|    - Atualiza memória reutilizando vetores existentes (zero alloc de Vector3)     |
+|    - Registra lastSeenTime = matchBB.elapsedTime                                  |
+|                                                                                   |
+|  [Ao Perder LOS (Consulta Compartilhada)]:                                        |
+|    - Itera sobre teamBB.knownEnemies com FILTRO ESTRITO:                          |
+|        elapsedTime - mem.lastSeenTime <= 3.0s                                     |
+|    - Avalia distância usando distanceToSquared (evita Math.sqrt em falso)         |
+|    - Se > 3.0s: ignora e programa descarte                                        |
+|                                                                                   |
++-----------------------------------------------------------------------------------+
+                                         |
+                                         v
++-----------------------------------------------------------------------------------+
+|                     PURGA IMEDIATA EM EVENTOS DE ABATE                            |
+|                                                                                   |
+|  [Abate do Jogador]:                                                              |
+|    - purgeEnemyFromBlackboards(matchBB, 'PLAYER')                                 |
+|                                                                                   |
+|  [Abate de Bot Adversário]:                                                        |
+|    - purgeEnemyFromBlackboards(matchBB, `BOT_${bot.id}`)                          |
+|                                                                                   |
+|  => Inimigos mortos deixam de ser rastreados no milissegundo de sua morte!        |
++-----------------------------------------------------------------------------------+
+```
 
 ---
 
-## 4. Status do Roteiro Geral de 5 Fases
-1. **FASE 1 & 1.5 — MAPA 1: VIELAS (110m × 110m)** [CONCLUÍDO]
-2. **FASE 2 — MAPA 2: ORLA (110m × 110m)** [CONCLUÍDO]
-3. **FASE 3 — MAPA 3: CENTRO (110m × 110m)** [CONCLUÍDO]
-4. **FASE 4 — MAPA 4: COMPLEXO (110m × 110m)** [CONCLUÍDO]
-5. **FASE 5 — MAPA 5: DUST II (110m × 110m)**
+## 3. Detalhamento das Alterações
+
+### 3.1. Utilitários no Módulo Tático (`src/botTacticalAI.ts`)
+- **`pruneTeamKnownEnemies(teamBB: TeamBlackboard, currentTime: number, maxAgeSec = 3.0)`**:
+  - Remove entradas com `currentTime - mem.lastSeenTime > maxAgeSec`.
+- **`pruneExpiredBlackboardIntel(matchBB: MatchTacticalBlackboard, maxAgeSec = 3.0)`**:
+  - Aplica o pruning nas equipes CT e TR.
+  - Limpa eventos sonoros com mais de 2.5s.
+  - Limpa hotspots de perigo com mais de 12.0s.
+- **`purgeEnemyFromBlackboards(matchBB: MatchTacticalBlackboard, targetId: string)`**:
+  - Deleta imediatamente `targetId` de `matchBB.teams.CT.knownEnemies` e `matchBB.teams.TR.knownEnemies`.
+  - Reseta referências de perseguição se o alvo eliminado coincidir com o bot ou jogador.
+- **Reutilização de instâncias em `recordKnownEnemyInBlackboard`**:
+  - Se a chave já existir no Map, atualiza os campos `x, y, z` de `lastKnownPos` e `estimatedVelocity` com `.copy()` em vez de instanciar `.clone()`, eliminando a geração de lixo para o coletor de memória (GC).
+
+### 3.2. Integração no Loop Principal (`src/App.tsx`)
+- **Temporizador Acumulado de Pruning (`blackboardPruneTimer`)**:
+  - Substitui o loop por frame (linhas 2005-2017) que realizava `forEach` a cada 16ms.
+  - Acumula `dt` e só roda o pruning leve a cada `0.2s` (5 vezes por segundo em vez de 60 vezes por segundo).
+- **Consulta Estrita de Inteligência Compartilhada (Linhas 2215-2228)**:
+  - Condição rigorosa: apenas considera dados onde `currentTime - mem.lastSeenTime <= 3.0`.
+  - Troca `distanceTo` por `distanceToSquared` na busca do alvo mais próximo.
+- **Purga Imediata no Momento do Abate**:
+  - **Morte do Jogador** (linha 2760): chamada imediata a `purgeEnemyFromBlackboards(matchBlackboard, 'PLAYER')`.
+  - **Morte de Bot por Tiro do Jogador** (linha 1463): chamada imediata a `purgeEnemyFromBlackboards(matchBlackboard, `BOT_${hitBot.id}`)`.
+  - **Morte de Bot em Combate Bot vs Bot** (linha 2864): chamada imediata a `purgeEnemyFromBlackboards(matchBlackboard, `BOT_${bestEnemyBot.id}`)`.
+- **Reinício de Round**:
+  - Garante limpeza completa dos Maps em `resetFullMatchState()` e `startNew5v5Round()`.
+
+---
+
+## 4. Ganhos de Desempenho e Benefícios Táticos
+
+1. **Redução Drástica de Custo de CPU**:
+   - De 60 varreduras por segundo para apenas 5 por segundo para rotinas de manutenção.
+   - Redução do número médio de elementos ativos no Map de ~10 (retenções de até 12s) para no máximo 1 a 3 combatentes recentemente avistados.
+2. **Zero Alocação de Vetores em Hotpaths**:
+   - Avistamentos contínuos reutilizam `THREE.Vector3` pré-alocados no registro de memória.
+3. **Comportamento Tático Mais Fiel e Realista**:
+   - Os bots não perseguem mais "fantasmas" de inimigos vistos há 10 segundos atrás do outro lado do mapa.
+   - Quando um inimigo é eliminado, nenhum bot continua atirando ou se movimentando em direção a um cadáver inexistente.
+
+---
+
+## 5. Plano de Validação e Verificação (Concluído com Sucesso)
+
+1. [x] **Compilação**: Executado `compile_applet` e `lint_applet` com sucesso sem erros ou avisos.
+2. [x] **Janela Estrita de 3 Segundos**: Bots de uma mesma equipe compartilham e consultam apenas memórias de inimigos com `elapsedTime - mem.lastSeenTime <= 3.0s`.
+3. [x] **Pruning Periódico a Cada 0.2s**: Substituído o loop per-frame de 60Hz por acumulador `blackboardPruneTimer >= 0.2s`, reduzindo drasticamente o consumo de CPU.
+4. [x] **Purga Imediata de Combatentes Eliminados**: `purgeEnemyFromBlackboards` implementado e disparado no milissegundo exato em que o jogador morre, em que um bot é abatido pelo jogador, quando um bot é abatido em combate bot-vs-bot, e quando o jogador assume um aliado com a tecla E.
+5. [x] **Zero Garbage Collection nos Avistamentos**: Reutilização de instâncias Vector3 com `.copy()` via `recordKnownEnemyInBlackboard`.

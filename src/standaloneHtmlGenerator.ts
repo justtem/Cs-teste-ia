@@ -723,7 +723,22 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
       </div>
 
       <div id="menu-view-main">
-        <button class="menu-btn primary" id="start-game-btn">▶ JOGAR 5v5 COMPETITIVO (INICIAR)</button>
+        <button class="menu-btn primary" id="start-game-btn">▶ JOGAR 5v5 COMPETITIVO (INICIAR / CONTINUAR)</button>
+        <div style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 12px 16px; margin-bottom: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span style="font-size: 12px; font-weight: 700; color: #ffffff;">Sensibilidade do Mouse</span>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span id="sens-val-main" style="font-family: monospace; font-size: 13px; font-weight: 800; color: #fbbf24; background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.35); padding: 2px 8px; border-radius: 6px;">2.0</span>
+              <button type="button" id="sens-reset-main" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #e4e4e7; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 6px; cursor: pointer;">Padrão (2.0)</button>
+            </div>
+          </div>
+          <input id="sens-slider-main" type="range" min="0.1" max="10.0" step="0.1" value="2.0" style="width: 100%; accent-color: #fbbf24; cursor: pointer;" />
+          <div style="display: flex; justify-content: space-between; font-size: 10px; color: #a1a1aa; font-family: monospace; margin-top: 2px;">
+            <span>0.1</span>
+            <span>2.0</span>
+            <span>10.0</span>
+          </div>
+        </div>
         <button class="menu-btn" id="open-team-btn">🛡 ESCOLHER TIME (POLÍCIA MILITAR vs BANDIDOS)</button>
         <button class="menu-btn" id="open-arsenal-btn">⚔ ARSENAL DE ARMAS & ESPECIFICAÇÕES</button>
         <button class="menu-btn" id="open-controls-btn">⌨ GUIA DE CONTROLES & TECLAS</button>
@@ -780,6 +795,21 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
 
       <!-- Aba Controles -->
       <div id="menu-view-controls" style="display: none;">
+        <div style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 12px 16px; margin-bottom: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span style="font-size: 12px; font-weight: 700; color: #ffffff;">Sensibilidade do Mouse</span>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span id="sens-val-controls" style="font-family: monospace; font-size: 13px; font-weight: 800; color: #fbbf24; background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.35); padding: 2px 8px; border-radius: 6px;">2.0</span>
+              <button type="button" id="sens-reset-controls" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #e4e4e7; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 6px; cursor: pointer;">Padrão (2.0)</button>
+            </div>
+          </div>
+          <input id="sens-slider-controls" type="range" min="0.1" max="10.0" step="0.1" value="2.0" style="width: 100%; accent-color: #fbbf24; cursor: pointer;" />
+          <div style="display: flex; justify-content: space-between; font-size: 10px; color: #a1a1aa; font-family: monospace; margin-top: 2px;">
+            <span>Mín: 0.1</span>
+            <span>Padrão: 2.0</span>
+            <span>Máx: 10.0</span>
+          </div>
+        </div>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; margin-bottom: 12px; color: #bbf7d0;">
           <div style="background: #101610; padding: 8px; border: 1px solid #4ade8044;">
             <strong style="color: #fbbf24;">WASD</strong>: Mover e strafe
@@ -1581,6 +1611,44 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
       document.getElementById('back-to-menu-btn2')?.addEventListener('click', () => showMenuView('menu-view-main'));
       document.getElementById('back-to-menu-btn3')?.addEventListener('click', () => showMenuView('menu-view-main'));
 
+      const SENS_STORAGE_KEY = 'cs16_mouse_sensitivity';
+      const sanitizeSensitivity = (raw) => {
+        const parsed = parseFloat(String(raw ?? ''));
+        if (!Number.isFinite(parsed)) return 2.0;
+        const clamped = Math.max(0.1, Math.min(10.0, parsed));
+        return Math.round(clamped * 10) / 10;
+      };
+      let mouseSensitivity = (() => {
+        try {
+          const saved = window.localStorage.getItem(SENS_STORAGE_KEY);
+          return saved !== null ? sanitizeSensitivity(saved) : 2.0;
+        } catch {
+          return 2.0;
+        }
+      })();
+
+      const syncSensitivityUI = (nextVal) => {
+        mouseSensitivity = sanitizeSensitivity(nextVal);
+        try {
+          window.localStorage.setItem(SENS_STORAGE_KEY, mouseSensitivity.toFixed(1));
+        } catch {}
+        const formatted = mouseSensitivity.toFixed(1);
+        const sMain = document.getElementById('sens-slider-main');
+        const sCtrl = document.getElementById('sens-slider-controls');
+        const vMain = document.getElementById('sens-val-main');
+        const vCtrl = document.getElementById('sens-val-controls');
+        if (sMain) sMain.value = String(mouseSensitivity);
+        if (sCtrl) sCtrl.value = String(mouseSensitivity);
+        if (vMain) vMain.textContent = formatted;
+        if (vCtrl) vCtrl.textContent = formatted;
+      };
+
+      syncSensitivityUI(mouseSensitivity);
+      document.getElementById('sens-slider-main')?.addEventListener('input', (e) => syncSensitivityUI(e.target.value));
+      document.getElementById('sens-slider-controls')?.addEventListener('input', (e) => syncSensitivityUI(e.target.value));
+      document.getElementById('sens-reset-main')?.addEventListener('click', () => syncSensitivityUI(2.0));
+      document.getElementById('sens-reset-controls')?.addEventListener('click', () => syncSensitivityUI(2.0));
+
       document.getElementById('join-ct-btn')?.addEventListener('click', () => {
         player.team = 'CT'; spawn5v5Round(); renderer.domElement.requestPointerLock();
       });
@@ -1599,8 +1667,9 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
       window.addEventListener('mouseup', (e) => { if (e.button === 0) isMouseDown = false; });
       window.addEventListener('mousemove', (e) => {
         if (!isPointerLocked) return;
-        player.yaw -= e.movementX * 0.0022;
-        player.pitch = Math.max(-1.4, Math.min(1.4, player.pitch - e.movementY * 0.0022));
+        const sens = 0.0011 * mouseSensitivity;
+        player.yaw -= e.movementX * sens;
+        player.pitch = Math.max(-1.4, Math.min(1.4, player.pitch - e.movementY * sens));
       });
       window.addEventListener('keydown', (e) => {
         keys[e.code] = true;

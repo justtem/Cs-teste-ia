@@ -36,6 +36,12 @@ import {
   Flame,
   Hourglass,
   MapPin,
+  Trophy,
+  Award,
+  Target,
+  Crown,
+  Zap,
+  TrendingUp,
 } from 'lucide-react';
 import { TacticalAudioEngine, MusicTrackId } from './soundEngine';
 import {
@@ -56,8 +62,35 @@ import {
   buildArenaMapById,
   getGroundElevationAt,
 } from './mapModels';
+import {
+  BotDifficulty,
+  BOT_DIFFICULTY_PROFILES,
+  BotTacticalBrain,
+  MapTacticalTopology,
+  MatchTacticalBlackboard,
+  buildMapTacticalTopology,
+  createMatchTacticalBlackboard,
+  prepareBlackboardForNewRound,
+  recordRoundOutcomeInBlackboard,
+  registerTacticalSoundEvent,
+  registerTacticalDeathEvent,
+  pruneExpiredBlackboardIntel,
+  purgeEnemyFromBlackboards,
+  recordKnownEnemyInBlackboard,
+  createBotTacticalBrain,
+  createBotLoadoutForSlot,
+  selectBestCoverNode,
+  selectStrategicGoalWaypoint,
+  findNearestWaypointIndex,
+  findTacticalPath,
+  isTargetWithinBotVisionCone,
+  smoothBotYawTowards,
+  classifySector,
+} from './botTacticalAI';
 
 type TeamSide = 'CT' | 'TR';
+
+const TOTAL_MATCH_ROUNDS = 7;
 
 interface KillfeedEntry {
   id: number;
@@ -72,6 +105,43 @@ interface KillfeedEntry {
 interface WeaponAmmoState {
   clip: number;
   reserve: number;
+}
+
+interface CombatantMatchStats {
+  key: string;
+  name: string;
+  team: TeamSide;
+  isPlayer: boolean;
+  weaponLabel: string;
+  kills: number;
+  deaths: number;
+  assists: number;
+  headshots: number;
+  damageDealt: number;
+  startingMoney: number;
+  killRewardsEarned: number;
+  roundRewardsEarned: number;
+  totalMoneyEarned: number;
+  finalMoney: number;
+}
+
+interface RoundHistoryEntry {
+  roundNumber: number;
+  winner: TeamSide;
+  reason: string;
+  ctAlive: number;
+  trAlive: number;
+}
+
+interface MatchResultsSnapshot {
+  mapId: MapId;
+  playerTeam: TeamSide;
+  ctScore: number;
+  trScore: number;
+  winnerTeam: TeamSide;
+  roundsPlayed: number;
+  roundHistory: RoundHistoryEntry[];
+  combatants: CombatantMatchStats[];
 }
 
 interface HudState {
@@ -134,6 +204,8 @@ interface BotEntity {
   waypointIndex: number;
   waypointTimer: number;
   patrolGoal: THREE.Vector3;
+  damagedByKeys: Set<string>;
+  brain: BotTacticalBrain;
 }
 
 interface SparkParticle {
@@ -160,6 +232,7 @@ const _toTarget = new THREE.Vector3();
 const _eyeOrigin = new THREE.Vector3();
 const _rayDir = new THREE.Vector3();
 const _ndcCenter = new THREE.Vector2(0, 0);
+const _zeroVel = new THREE.Vector3(0, 0, 0);
 
 const CT_BOT_NAMES = [
   'PM_Capitao',
@@ -185,6 +258,59 @@ const MUSIC_TRACK_LABELS: Record<MusicTrackId, string> = {
   stealth_pulse: 'Spec-Ops Stealth',
 };
 
+const MOUSE_SENSITIVITY_KEY = 'cs16_mouse_sensitivity';
+const DEFAULT_MOUSE_SENSITIVITY = 2.0;
+const MIN_MOUSE_SENSITIVITY = 0.1;
+const MAX_MOUSE_SENSITIVITY = 10.0;
+
+function sanitizeMouseSensitivity(raw: unknown): number {
+  const parsed = typeof raw === 'number' ? raw : parseFloat(String(raw ?? ''));
+  if (!Number.isFinite(parsed)) return DEFAULT_MOUSE_SENSITIVITY;
+  const clamped = Math.max(MIN_MOUSE_SENSITIVITY, Math.min(MAX_MOUSE_SENSITIVITY, parsed));
+  return Math.round(clamped * 10) / 10;
+}
+
+function loadMouseSensitivity(): number {
+  try {
+    const stored = window.localStorage.getItem(MOUSE_SENSITIVITY_KEY);
+    if (stored === null) return DEFAULT_MOUSE_SENSITIVITY;
+    return sanitizeMouseSensitivity(stored);
+  } catch {
+    return DEFAULT_MOUSE_SENSITIVITY;
+  }
+}
+
+function saveMouseSensitivity(value: number): void {
+  try {
+    const sanitized = sanitizeMouseSensitivity(value);
+    window.localStorage.setItem(MOUSE_SENSITIVITY_KEY, sanitized.toFixed(1));
+  } catch {
+    // Ignora restrições de armazenamento do navegador
+  }
+}
+
+const BOT_DIFFICULTY_KEY = 'cs16_bot_difficulty';
+
+function loadBotDifficulty(): BotDifficulty {
+  try {
+    const stored = window.localStorage.getItem(BOT_DIFFICULTY_KEY);
+    if (stored === 'easy' || stored === 'normal' || stored === 'hard') {
+      return stored;
+    }
+    return 'normal';
+  } catch {
+    return 'normal';
+  }
+}
+
+function saveBotDifficulty(difficulty: BotDifficulty): void {
+  try {
+    window.localStorage.setItem(BOT_DIFFICULTY_KEY, difficulty);
+  } catch {
+    // Ignora restrições de armazenamento do navegador
+  }
+}
+
 function formatRoundClock(seconds: number): string {
   const clamped = Math.max(0, Math.ceil(seconds));
   const mins = Math.floor(clamped / 60);
@@ -196,7 +322,7 @@ export default function App() {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const audioRef = useRef<TacticalAudioEngine>(new TacticalAudioEngine());
 
-  const [gameMode, setGameMode] = useState<'title' | 'playing' | 'paused'>('title');
+  const [gameMode, setGameMode] = useState<'title' | 'playing' | 'paused' | 'results'>('title');
   const [menuTab, setMenuTab] = useState<'main' | 'maps' | 'team' | 'arsenal' | 'controls'>('main');
   const [shopTab, setShopTab] = useState<WeaponShopTab>('rifles');
   const [bgStyle, setBgStyle] = useState<'dust2' | 'sandstorm' | 'tactical_night'>('dust2');
@@ -206,9 +332,12 @@ export default function App() {
   const [isMuted, setIsMuted] = useState(false);
   const [isMusicPlaying, setIsMusicPlaying] = useState(false);
   const [musicTrack, setMusicTrack] = useState<MusicTrackId>('cs_tactical');
+  const [mouseSensitivity, setMouseSensitivity] = useState<number>(() => loadMouseSensitivity());
+  const [botDifficulty, setBotDifficulty] = useState<BotDifficulty>(() => loadBotDifficulty());
   const [damageFlash, setDamageFlash] = useState(false);
   const [headshotFlash, setHeadshotFlash] = useState(false);
   const [killfeed, setKillfeed] = useState<KillfeedEntry[]>([]);
+  const [matchResults, setMatchResults] = useState<MatchResultsSnapshot | null>(null);
 
   const [hud, setHud] = useState<HudState>({
     activeMapId: 'complexo',
@@ -244,7 +373,9 @@ export default function App() {
     isLocked: boolean;
     isBuyOpen: boolean;
     isCodeOpen: boolean;
-    gameMode: 'title' | 'playing' | 'paused';
+    gameMode: 'title' | 'playing' | 'paused' | 'results';
+    mouseSensitivity: number;
+    botDifficulty: BotDifficulty;
     requestLock: () => void;
     selectMap: (mapId: MapId, startImmediately?: boolean) => void;
     selectTeamAndStart: (team: TeamSide) => void;
@@ -259,6 +390,8 @@ export default function App() {
     isBuyOpen: false,
     isCodeOpen: false,
     gameMode: 'title',
+    mouseSensitivity,
+    botDifficulty,
     requestLock: () => {},
     selectMap: () => {},
     selectTeamAndStart: () => {},
@@ -270,11 +403,26 @@ export default function App() {
     returnToMenu: () => {},
   });
 
+  const updateMouseSensitivity = useCallback((nextValue: number) => {
+    const sanitized = sanitizeMouseSensitivity(nextValue);
+    setMouseSensitivity(sanitized);
+    gameRef.current.mouseSensitivity = sanitized;
+    saveMouseSensitivity(sanitized);
+  }, []);
+
+  const updateBotDifficulty = useCallback((nextDifficulty: BotDifficulty) => {
+    setBotDifficulty(nextDifficulty);
+    gameRef.current.botDifficulty = nextDifficulty;
+    saveBotDifficulty(nextDifficulty);
+  }, []);
+
   useEffect(() => {
     gameRef.current.isBuyOpen = isBuyOpen;
     gameRef.current.isCodeOpen = isCodeModalOpen;
     gameRef.current.gameMode = gameMode;
-  }, [isBuyOpen, isCodeModalOpen, gameMode]);
+    gameRef.current.mouseSensitivity = mouseSensitivity;
+    gameRef.current.botDifficulty = botDifficulty;
+  }, [isBuyOpen, isCodeModalOpen, gameMode, mouseSensitivity, botDifficulty]);
 
   const toggleMute = useCallback(() => {
     setIsMuted((prev) => {
@@ -350,6 +498,9 @@ export default function App() {
     const elevationZones: ElevationZone[] = [];
     const shootableMeshes: THREE.Mesh[] = [];
     let activeWaypoints: [number, number, number][] = [];
+    let mapTopology: MapTacticalTopology | null = null;
+    let matchBlackboard: MatchTacticalBlackboard = createMatchTacticalBlackboard();
+    let blackboardPruneTimer = 0;
     const bots: BotEntity[] = [];
     const decals: THREE.Mesh[] = [];
     const sparks: SparkParticle[] = [];
@@ -361,6 +512,17 @@ export default function App() {
     let titleOrbitAngle = 0;
     let lastHudTimerInt = 300;
     let lastFreezeSecondInt = 10;
+    let roundTransitionTimeoutId: number | null = null;
+    const playerDamagedByKeys = new Set<string>();
+    const matchStatsMap = new Map<string, CombatantMatchStats>();
+    const roundHistory: RoundHistoryEntry[] = [];
+
+    const clearRoundTransitionTimer = () => {
+      if (roundTransitionTimeoutId !== null) {
+        window.clearTimeout(roundTransitionTimeoutId);
+        roundTransitionTimeoutId = null;
+      }
+    };
 
     // Estado interno do jogador e da partida 5v5 (5 minutos = 300 segundos por round)
     const player = {
@@ -407,8 +569,148 @@ export default function App() {
       equipAnimOffset: 0,
       cameraShake: 0,
       wheelFlashTimer: 0,
-      bannerText: 'PARTIDA 5v5 INICIADA — 05:00 NO RELÓGIO!',
+      bannerText: 'PARTIDA 5v5 INICIADA — 7 ROUNDS COMPLETOS!',
       bannerTimer: 3.0,
+    };
+
+    const getPlayerPrimaryWeaponLabel = (): string => {
+      const slot1Spec = WEAPON_CATALOG[player.loadout[1]];
+      const slot2Spec = WEAPON_CATALOG[player.loadout[2]];
+      if (slot1Spec && slot2Spec) return `${slot1Spec.shortName} / ${slot2Spec.shortName}`;
+      if (slot1Spec) return slot1Spec.shortName;
+      return 'Faca Tática';
+    };
+
+    const initMatchStats = () => {
+      matchStatsMap.clear();
+      roundHistory.length = 0;
+      setMatchResults(null);
+
+      matchStatsMap.set('PLAYER', {
+        key: 'PLAYER',
+        name: 'Você (Operador)',
+        team: player.team,
+        isPlayer: true,
+        weaponLabel: getPlayerPrimaryWeaponLabel(),
+        kills: 0,
+        deaths: 0,
+        assists: 0,
+        headshots: 0,
+        damageDealt: 0,
+        startingMoney: 1200,
+        killRewardsEarned: 0,
+        roundRewardsEarned: 0,
+        totalMoneyEarned: 1200,
+        finalMoney: 1200,
+      });
+
+      const ctBotCount = player.team === 'CT' ? 4 : 5;
+      for (let i = 0; i < ctBotCount; i++) {
+        const bName = CT_BOT_NAMES[i % CT_BOT_NAMES.length];
+        const loadout = createBotLoadoutForSlot('CT', i, 2);
+        matchStatsMap.set(bName, {
+          key: bName,
+          name: bName,
+          team: 'CT',
+          isPlayer: false,
+          weaponLabel: `${loadout.weaponProfile.weaponLabel} (${loadout.personality})`,
+          kills: 0,
+          deaths: 0,
+          assists: 0,
+          headshots: 0,
+          damageDealt: 0,
+          startingMoney: 1200,
+          killRewardsEarned: 0,
+          roundRewardsEarned: 0,
+          totalMoneyEarned: 1200,
+          finalMoney: 1200,
+        });
+      }
+
+      const trBotCount = player.team === 'TR' ? 4 : 5;
+      for (let i = 0; i < trBotCount; i++) {
+        const bName = TR_BOT_NAMES[i % TR_BOT_NAMES.length];
+        const loadout = createBotLoadoutForSlot('TR', i, 2);
+        matchStatsMap.set(bName, {
+          key: bName,
+          name: bName,
+          team: 'TR',
+          isPlayer: false,
+          weaponLabel: `${loadout.weaponProfile.weaponLabel} (${loadout.personality})`,
+          kills: 0,
+          deaths: 0,
+          assists: 0,
+          headshots: 0,
+          damageDealt: 0,
+          startingMoney: 1200,
+          killRewardsEarned: 0,
+          roundRewardsEarned: 0,
+          totalMoneyEarned: 1200,
+          finalMoney: 1200,
+        });
+      }
+    };
+
+    const recordCombatKillAndAssists = (
+      killerKey: string,
+      victimKey: string,
+      damagedBySet: Set<string>,
+      killReward: number,
+      isHeadshot: boolean
+    ) => {
+      const killerStats = matchStatsMap.get(killerKey);
+      if (killerStats) {
+        killerStats.kills++;
+        if (isHeadshot) killerStats.headshots++;
+        killerStats.killRewardsEarned += killReward;
+        killerStats.totalMoneyEarned += killReward;
+        if (killerStats.isPlayer) {
+          killerStats.finalMoney = player.money;
+          killerStats.weaponLabel = getPlayerPrimaryWeaponLabel();
+        } else {
+          killerStats.finalMoney = Math.min(16000, killerStats.finalMoney + killReward);
+        }
+      }
+
+      const victimStats = matchStatsMap.get(victimKey);
+      if (victimStats) {
+        victimStats.deaths++;
+      }
+
+      // Contabiliza assistência para qualquer companheiro que tenha causado dano ao alvo neste round
+      damagedBySet.forEach((attackerKey) => {
+        if (attackerKey !== killerKey) {
+          const assistStats = matchStatsMap.get(attackerKey);
+          if (assistStats && killerStats && assistStats.team === killerStats.team) {
+            assistStats.assists++;
+            if (!assistStats.isPlayer) {
+              assistStats.killRewardsEarned += 150;
+              assistStats.totalMoneyEarned += 150;
+              assistStats.finalMoney = Math.min(16000, assistStats.finalMoney + 150);
+            }
+          }
+        }
+      });
+    };
+
+    const buildFinalMatchResultsSnapshot = (): MatchResultsSnapshot => {
+      const pStats = matchStatsMap.get('PLAYER');
+      if (pStats) {
+        pStats.finalMoney = player.money;
+        pStats.weaponLabel = getPlayerPrimaryWeaponLabel();
+      }
+      const combatantsList = Array.from(matchStatsMap.values());
+      const winnerTeam: TeamSide = player.ctScore >= player.trScore ? 'CT' : 'TR';
+      return {
+        mapId: player.mapId,
+        playerTeam: player.team,
+        ctScore: player.ctScore,
+        trScore: player.trScore,
+        winnerTeam,
+        roundsPlayed: TOTAL_MATCH_ROUNDS,
+        roundHistory: [...roundHistory],
+        combatants: combatantsList.map((c) => ({ ...c })),
+      };
     };
 
     const getActiveWeaponId = (): string => {
@@ -492,6 +794,41 @@ export default function App() {
       setKillfeed((prev) => [entry, ...prev.slice(0, 5)]);
     };
 
+    const collidesWithWorld = (px: number, pz: number, radius: number, py = 1.72): boolean => {
+      for (let i = 0; i < colliders.length; i++) {
+        const c = colliders[i];
+        if (py - 1.5 > c.maxY || py + 0.2 < c.minY) continue;
+        const closestX = Math.max(c.minX, Math.min(px, c.maxX));
+        const closestZ = Math.max(c.minZ, Math.min(pz, c.maxZ));
+        const dx = px - closestX;
+        const dz = pz - closestZ;
+        if (dx * dx + dz * dz < radius * radius) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const topologyRaycaster = new THREE.Raycaster();
+    const checkWorldLineOfSight = (
+      ax: number,
+      ay: number,
+      az: number,
+      bx: number,
+      by: number,
+      bz: number
+    ): boolean => {
+      _eyeOrigin.set(ax, ay, az);
+      _rayDir.set(bx - ax, by - ay, bz - az);
+      const dist = _rayDir.length();
+      if (dist < 0.2) return true;
+      _rayDir.divideScalar(dist);
+      topologyRaycaster.set(_eyeOrigin, _rayDir);
+      topologyRaycaster.far = dist;
+      const hits = topologyRaycaster.intersectObjects(shootableMeshes, false);
+      return hits.length === 0 || hits[0].distance >= dist - 0.35;
+    };
+
     // Carrega ou troca o mapa 3D ativo sob demanda, liberando VRAM do mapa anterior
     const loadArenaMap = (mapId: MapId) => {
       for (let i = decals.length - 1; i >= 0; i--) {
@@ -520,6 +857,17 @@ export default function App() {
       elevationZones.push(...built.elevationZones);
       shootableMeshes.push(...built.shootableMeshes);
       activeWaypoints = built.waypoints;
+
+      // Constrói topologia tática de zonas, grafo de navegação A* e nós de cobertura 3D
+      mapTopology = buildMapTacticalTopology(
+        mapId,
+        activeWaypoints,
+        colliders,
+        elevationZones,
+        collidesWithWorld,
+        (x, z, currentY = 0) => getGroundElevationAt(x, z, currentY, elevationZones),
+        checkWorldLineOfSight
+      );
 
       scene.background = new THREE.Color(built.skyColor);
       scene.fog = new THREE.FogExp2(built.fogColor, built.fogDensity);
@@ -570,13 +918,17 @@ export default function App() {
 
     // Spawner de Round 5v5 (5 CT Azul vs 5 TR Vermelho) + Reset do Relógio de 5 Minutos (300s)
     const startNew5v5Round = () => {
+      clearRoundTransitionTimer();
       bots.forEach((b) => scene.remove(b.group));
       bots.length = 0;
+      playerDamagedByKeys.clear();
 
       if (!currentBuiltMap) {
         loadArenaMap(player.mapId);
       }
       const mapData = currentBuiltMap!;
+      prepareBlackboardForNewRound(matchBlackboard, player.round);
+      blackboardPruneTimer = 0;
 
       player.isDead = false;
       player.hp = 100;
@@ -618,6 +970,7 @@ export default function App() {
         names: string[]
       ) => {
         const isAllyToPlayer = teamSide === player.team;
+        const preferredSector = matchBlackboard.teams[teamSide].preferredSectorFocus;
 
         for (let i = 0; i < botCount; i++) {
           const built = createTeamCharacterModel(teamSide, i, isSoftwareGl);
@@ -654,21 +1007,43 @@ export default function App() {
             sp[1],
             sp[2] + (Math.random() - 0.5) * 1.4
           );
+          const initialYaw = teamSide === 'CT' ? Math.PI * 0.5 : -Math.PI * 0.5;
+          group.rotation.y = initialYaw;
           scene.add(group);
 
-          const initialWpIdx = Math.floor(Math.random() * activeWaypoints.length);
+          const brain = createBotTacticalBrain(
+            teamSide,
+            i,
+            player.round,
+            group.position,
+            initialYaw,
+            preferredSector
+          );
+
+          const botId = bots.length + 1;
+          const initialWpIdx = mapTopology
+            ? selectStrategicGoalWaypoint(
+                botId,
+                teamSide,
+                group.position,
+                brain,
+                mapTopology,
+                matchBlackboard.teams[teamSide],
+                null
+              )
+            : Math.floor(Math.random() * activeWaypoints.length);
           const wp = activeWaypoints[initialWpIdx] || [0, 0, 0];
 
-          const pmWeapons = ['IMBEL IA2', 'ParaFAL 7.62', 'IMBEL IA2', 'CBC Pump 12G', 'IMBEL IA2', 'ParaFAL 7.62'];
-          const trWeapons = ['AK-47', 'HK G3 7.62', 'Doze Cano Curto', 'ParaFAL 7.62', 'AK-47', 'HK G3 7.62'];
-          const botWeaponLabel =
-            teamSide === 'CT'
-              ? pmWeapons[i % pmWeapons.length]
-              : trWeapons[i % trWeapons.length];
+          const botName = names[i % names.length];
+          const botWeaponLabel = brain.weaponProfile.weaponLabel;
+          const bStats = matchStatsMap.get(botName);
+          if (bStats) {
+            bStats.weaponLabel = `${botWeaponLabel} (${brain.personality})`;
+          }
 
           const botEntity: BotEntity = {
-            id: bots.length + 1,
-            name: names[i % names.length],
+            id: botId,
+            name: botName,
             team: teamSide,
             group,
             headMesh,
@@ -686,17 +1061,19 @@ export default function App() {
             weaponLabel: botWeaponLabel,
             hp: 100,
             maxHp: 100,
-            speed: 4.6 + Math.random() * 0.85,
-            attackCooldown: 0.35 + Math.random() * 0.45,
-            burstShotsLeft: 3,
+            speed: (4.7 + Math.random() * 0.65) * brain.weaponProfile.moveSpeedMultiplier,
+            attackCooldown: 0.25 + Math.random() * 0.35,
+            burstShotsLeft: brain.weaponProfile.burstMin,
             burstShotTimer: 0,
             hitFlashTimer: 0,
             strafeDir: Math.random() > 0.5 ? 1 : -1,
             strafeTimer: 0.85 + Math.random() * 0.9,
             walkCycle: Math.random() * Math.PI * 2,
             waypointIndex: initialWpIdx,
-            waypointTimer: 3.5 + Math.random() * 2.5,
+            waypointTimer: 3.5 + Math.random() * 2.0,
             patrolGoal: new THREE.Vector3(wp[0], wp[1], wp[2]),
+            damagedByKeys: new Set<string>(),
+            brain,
           };
 
           headMesh.userData = { bot: botEntity, isHead: true };
@@ -716,6 +1093,7 @@ export default function App() {
     };
 
     // Verifica se o round 5v5 terminou (por eliminação de todos os 5 de um time ou tempo 05:00 esgotado)
+    // Todos os 7 rounds são disputados obrigatoriamente antes de encerrar a partida!
     const evaluateRoundOutcome = (timeExpired = false) => {
       if (player.isRoundEnding) return;
       const { ct, tr } = getTeamAliveCounts();
@@ -745,22 +1123,75 @@ export default function App() {
         if (winningTeam === 'CT') player.ctScore++;
         else player.trScore++;
 
+        recordRoundOutcomeInBlackboard(matchBlackboard, winningTeam);
+
         const playerWon = winningTeam === player.team;
         const roundBonus = playerWon ? 2400 : 1400;
         player.money = Math.min(16000, player.money + roundBonus);
 
+        // Registra histórico do round e atualiza a economia de todos os 10 combatentes
+        roundHistory.push({
+          roundNumber: player.round,
+          winner: winningTeam,
+          reason: winReason,
+          ctAlive: ct,
+          trAlive: tr,
+        });
+
+        matchStatsMap.forEach((stats) => {
+          const cWon = stats.team === winningTeam;
+          const cBonus = cWon ? 2400 : 1400;
+          stats.roundRewardsEarned += cBonus;
+          stats.totalMoneyEarned += cBonus;
+          if (stats.isPlayer) {
+            stats.finalMoney = player.money;
+            stats.weaponLabel = getPlayerPrimaryWeaponLabel();
+          } else {
+            // Bots investem parte da renda em munição/colete entre os rounds
+            const botRebuyCost = player.round < TOTAL_MATCH_ROUNDS ? (cWon ? 550 : 850) : 0;
+            stats.finalMoney = Math.max(
+              0,
+              Math.min(16000, stats.finalMoney + cBonus - botRebuyCost)
+            );
+          }
+        });
+
         const teamLabel = winningTeam === 'CT' ? 'POLÍCIA MILITAR (PM)' : 'BANDIDOS';
         audioRef.current.playBuyOrRoundChime(playerWon);
-        showBanner(
-          `${teamLabel} VENCEU O ROUND ${player.round}! (${winReason}) +$${roundBonus}`,
-          3.0
-        );
 
-        setTimeout(() => {
-          player.round++;
-          startNew5v5Round();
-          showBanner(`ROUND ${player.round} INICIADO — PM vs BANDIDOS`, 2.2);
-        }, 2800);
+        if (player.round >= TOTAL_MATCH_ROUNDS) {
+          // 7º Round concluído: Encerra a partida e abre a Tela de Resultados Final
+          showBanner(
+            `FIM DA PARTIDA (7/7 ROUNDS)! ${teamLabel} VENCEU O ROUND FINAL!`,
+            3.0
+          );
+          clearRoundTransitionTimer();
+          roundTransitionTimeoutId = window.setTimeout(() => {
+            roundTransitionTimeoutId = null;
+            const snapshot = buildFinalMatchResultsSnapshot();
+            setMatchResults(snapshot);
+            setIsBuyOpen(false);
+            setIsCodeModalOpen(false);
+            document.exitPointerLock?.();
+            setGameMode('results');
+          }, 2600);
+        } else {
+          // Continua para o próximo round (1 a 6 -> próximo round)
+          showBanner(
+            `${teamLabel} VENCEU O ROUND ${player.round}/${TOTAL_MATCH_ROUNDS}! (${winReason}) +$${roundBonus}`,
+            2.8
+          );
+          clearRoundTransitionTimer();
+          roundTransitionTimeoutId = window.setTimeout(() => {
+            roundTransitionTimeoutId = null;
+            player.round++;
+            startNew5v5Round();
+            showBanner(
+              `ROUND ${player.round} DE ${TOTAL_MATCH_ROUNDS} INICIADO — PM vs BANDIDOS`,
+              2.2
+            );
+          }, 2800);
+        }
       }
 
       syncHud();
@@ -786,6 +1217,14 @@ export default function App() {
       player.yaw = ally.group.rotation.y;
       player.pitch = 0;
 
+      matchBlackboard.teams[ally.team].reservedCoverNodes.forEach((botId, coverId) => {
+        if (botId === ally.id) {
+          matchBlackboard.teams[ally.team].reservedCoverNodes.delete(coverId);
+        }
+      });
+      matchBlackboard.teams[ally.team].assignedWaypointGoals.delete(ally.id);
+      purgeEnemyFromBlackboards(matchBlackboard, `BOT_${ally.id}`);
+
       scene.remove(ally.group);
       const idx = bots.indexOf(ally);
       if (idx !== -1) bots.splice(idx, 1);
@@ -794,21 +1233,6 @@ export default function App() {
       audioRef.current.playBuyOrRoundChime(true);
       showBanner(`VOCÊ ASSUMIU O CONTROLE DO ALIADO ${ally.name}!`, 2.0);
       syncHud();
-    };
-
-    const collidesWithWorld = (px: number, pz: number, radius: number, py = 1.72): boolean => {
-      for (let i = 0; i < colliders.length; i++) {
-        const c = colliders[i];
-        if (py - 1.5 > c.maxY || py + 0.2 < c.minY) continue;
-        const closestX = Math.max(c.minX, Math.min(px, c.maxX));
-        const closestZ = Math.max(c.minZ, Math.min(pz, c.maxZ));
-        const dx = px - closestX;
-        const dz = pz - closestZ;
-        if (dx * dx + dz * dz < radius * radius) {
-          return true;
-        }
-      }
-      return false;
     };
 
     const spawnImpactSparks = (point: THREE.Vector3, normal: THREE.Vector3, colorHex: number) => {
@@ -902,6 +1326,10 @@ export default function App() {
       player.recoilOffset = spec.recoilKick;
       if (spec.isMelee) {
         player.knifeSwingOffset = isHeavyKnifeStab ? 1.35 : 0.9;
+      } else {
+        // Registra som de disparo do jogador para que bots dentro do raio auditivo possam investigar
+        const loudness = spec.id === 'awp' ? 62 : spec.id === 'm4a1' ? 40 : 48;
+        registerTacticalSoundEvent(matchBlackboard, player.pos, player.team, loudness);
       }
 
       player.cameraShake = spec.recoilKick * 0.45;
@@ -986,6 +1414,31 @@ export default function App() {
             const dmg = Math.round(baseDmg * (isHeadshot ? spec.headshotMult : 1));
 
             hitBot.hp -= dmg;
+            hitBot.damagedByKeys.add('PLAYER');
+            hitBot.brain.recentlyDamagedTimer = 2.4;
+            hitBot.brain.lastTargetPos.copy(player.pos);
+            hitBot.brain.hasLastTargetPos = true;
+            hitBot.brain.lastSeenTimestamp = matchBlackboard.elapsedTime;
+
+            // Notifica silenciosamente o Blackboard da equipe do bot atingido (pedido de suporte / posição do atacante)
+            const botTeamBB = matchBlackboard.teams[hitBot.team];
+            botTeamBB.allyUnderFireId = hitBot.id;
+            botTeamBB.allyUnderFirePos = hitBot.group.position.clone();
+            botTeamBB.allyUnderFireTime = matchBlackboard.elapsedTime;
+            botTeamBB.knownEnemies.set('PLAYER', {
+              targetId: 'PLAYER',
+              lastKnownPos: player.pos.clone(),
+              estimatedVelocity: player.vel.clone(),
+              lastSeenTime: matchBlackboard.elapsedTime,
+              isVisualConfirmation: true,
+              reportedByBotId: hitBot.id,
+            });
+
+            const pStats = matchStatsMap.get('PLAYER');
+            if (pStats) {
+              pStats.damageDealt += dmg;
+            }
+
             hitBot.hitFlashTimer = 0.14;
             hitBot.bodyMat.color.setHex(0xffffff);
             hitBot.bodyMat.emissive.setHex(0x552222);
@@ -1006,6 +1459,20 @@ export default function App() {
               audioRef.current.playEnemyHit(isHeadshot, true);
               hitEnemySoundPlayed = true;
               hitstopTimer = isHeadshot ? 0.045 : 0.025;
+
+              registerTacticalDeathEvent(
+                matchBlackboard,
+                hitBot.team,
+                hitBot.group.position,
+                player.pos,
+                'PLAYER'
+              );
+              purgeEnemyFromBlackboards(matchBlackboard, `BOT_${hitBot.id}`);
+              botTeamBB.reservedCoverNodes.forEach((bId, cId) => {
+                if (bId === hitBot.id) botTeamBB.reservedCoverNodes.delete(cId);
+              });
+              botTeamBB.assignedWaypointGoals.delete(hitBot.id);
+
               scene.remove(hitBot.group);
               const idx = bots.indexOf(hitBot);
               if (idx !== -1) bots.splice(idx, 1);
@@ -1014,6 +1481,14 @@ export default function App() {
               if (isHeadshot) player.headshots++;
               const bonus = spec.killReward + (isHeadshot ? 150 : 0);
               player.money = Math.min(16000, player.money + bonus);
+
+              recordCombatKillAndAssists(
+                'PLAYER',
+                hitBot.name,
+                hitBot.damagedByKeys,
+                bonus,
+                isHeadshot
+              );
 
               const killLabel =
                 spec.isMelee && isHeavyKnifeStab ? `${spec.shortName} (Estocada)` : spec.shortName;
@@ -1101,6 +1576,8 @@ export default function App() {
           player.money -= price;
           player.armor = 100;
           player.hp = Math.min(100, player.hp + 50);
+          const pStats = matchStatsMap.get('PLAYER');
+          if (pStats) pStats.finalMoney = player.money;
           audioRef.current.playBuyOrRoundChime(false);
           showBanner('COLETE KEVLAR + KIT MÉDICO EQUIPADO!', 1.6);
           syncHud();
@@ -1121,6 +1598,11 @@ export default function App() {
         const slotToUse =
           targetSlot || (player.activeSlotIndex === 2 ? 2 : 1);
         player.loadout[slotToUse] = spec.id;
+        const pStats = matchStatsMap.get('PLAYER');
+        if (pStats) {
+          pStats.finalMoney = player.money;
+          pStats.weaponLabel = getPlayerPrimaryWeaponLabel();
+        }
         switchToInventorySlot(slotToUse);
         showBanner(`${spec.name} EQUIPADA NO SLOT [${slotToUse + 1}]!`, 1.6);
       } else {
@@ -1128,8 +1610,8 @@ export default function App() {
       }
     };
 
-    const selectTeamAndStartMatch = (chosenTeam: TeamSide) => {
-      player.team = chosenTeam;
+    const resetFullMatchState = () => {
+      clearRoundTransitionTimer();
       player.money = 1200;
       player.kills = 0;
       player.headshots = 0;
@@ -1138,15 +1620,25 @@ export default function App() {
       player.trScore = 0;
       player.loadout = ['knife', 'ak47', 'awp'];
       player.activeSlotIndex = 0;
+      matchBlackboard = createMatchTacticalBlackboard();
+      setKillfeed([]);
+      initMatchStats();
+      startNew5v5Round();
+    };
+
+    const selectTeamAndStartMatch = (chosenTeam: TeamSide) => {
+      player.team = chosenTeam;
+      resetFullMatchState();
 
       if (!audioRef.current.musicPlaying && !audioRef.current.muted) {
         audioRef.current.startMusic();
         setIsMusicPlaying(true);
       }
 
-      startNew5v5Round();
       showBanner(
-        `VOCÊ ENTROU NO ESQUADRÃO ${chosenTeam === 'CT' ? 'CONTRA-TERRORISTA (AZUL)' : 'TERRORISTA (VERMELHO)'} — 5v5!`,
+        `PARTIDA DE ${TOTAL_MATCH_ROUNDS} ROUNDS INICIADA — EQUIPE ${
+          chosenTeam === 'CT' ? 'POLÍCIA MILITAR (PM)' : 'BANDIDOS (TR)'
+        }!`,
         2.5
       );
       setIsBuyOpen(false);
@@ -1161,11 +1653,7 @@ export default function App() {
 
     const selectMapAndSetup = (chosenMapId: MapId, startImmediately = false) => {
       loadArenaMap(chosenMapId);
-      player.round = 1;
-      player.ctScore = 0;
-      player.trScore = 0;
-      player.money = 1200;
-      startNew5v5Round();
+      resetFullMatchState();
       const mapMeta = MAP_CATALOG[chosenMapId];
       showBanner(`MAPA CARREGADO: ${mapMeta.name.toUpperCase()} (${mapMeta.subtitle})`, 2.5);
       if (startImmediately) {
@@ -1228,6 +1716,7 @@ export default function App() {
       scene.add(sunLight);
 
       loadArenaMap(player.mapId);
+      initMatchStats();
       startNew5v5Round();
 
       if (!isSoftwareGl) {
@@ -1276,7 +1765,7 @@ export default function App() {
         }
       }
 
-      if (gameRef.current.gameMode === 'title') {
+      if (gameRef.current.gameMode === 'title' || gameRef.current.gameMode === 'results') {
         titleOrbitAngle += dt * 0.12;
         const orbitRadius = 72;
         const orbitHeight = 48;
@@ -1513,8 +2002,19 @@ export default function App() {
       }
 
       // ========================================================================
-      // IA TÁTICA AVANÇADA 5v5: Priorização LOS Real, Waypoints, Strafe e Rajadas
+      // IA TÁTICA AVANÇADA 5v5: FSM + Utility AI, Cobertura 3D, Peeking, Som e Memória
       // ========================================================================
+      matchBlackboard.elapsedTime += dt;
+      blackboardPruneTimer += dt;
+      if (blackboardPruneTimer >= 0.2) {
+        blackboardPruneTimer = 0;
+        pruneExpiredBlackboardIntel(matchBlackboard, 3.0);
+      }
+
+      const diffProfile =
+        BOT_DIFFICULTY_PROFILES[gameRef.current.botDifficulty] ||
+        BOT_DIFFICULTY_PROFILES.normal;
+
       const losRay = new THREE.Raycaster();
 
       // Auxiliar para verificar se o Bot tem Linha de Visão (LOS) limpa até um ponto (suporta altura 3D das lajes)
@@ -1533,9 +2033,15 @@ export default function App() {
         return wallHits.length === 0 || wallHits[0].distance >= fullDist - 0.35;
       };
 
+      const { ct: aliveCtCount, tr: aliveTrCount } = getTeamAliveCounts();
+
       for (let i = bots.length - 1; i >= 0; i--) {
         const bot = bots[i];
         if (!bot) continue;
+
+        const brain = bot.brain;
+        const teamBB = matchBlackboard.teams[bot.team];
+        const wProf = brain.weaponProfile;
 
         if (bot.allyMarker) {
           bot.allyMarker.rotation.y += dt * 3.0;
@@ -1550,126 +2056,443 @@ export default function App() {
           }
         }
 
-        // 1. AVALIAÇÃO DE ALVOS: Inimigos VISÍVEIS (hasLOS = true) têm prioridade absoluta
-        // Jogador e Bots inimigos têm igual prioridade quando visíveis!
+        if (brain.recentlyDamagedTimer > 0) {
+          brain.recentlyDamagedTimer = Math.max(0, brain.recentlyDamagedTimer - dt);
+        }
+
+        // 1. PERCEPÇÃO VISUAL LEGÍTIMA (SEM WALLHACK: requer cone de visão ou reação a dano + Raycast 3D)
         let bestEnemyBot: BotEntity | null = null;
         let targetIsPlayer = false;
         let bestVisibleDist = Infinity;
-        let bestHiddenEnemyBot: BotEntity | null = null;
-        let hiddenTargetIsPlayer = false;
-        let bestHiddenDist = Infinity;
+        let visibleEnemyCount = 0;
 
-        // Testa todos os bots adversários vivos
         for (let j = 0; j < bots.length; j++) {
           const other = bots[j];
-          if (other.team !== bot.team) {
+          if (other.team !== bot.team && other.hp > 0) {
             const d = bot.group.position.distanceTo(other.group.position);
+            if (d > 58) continue;
+
+            const inCone =
+              brain.recentlyDamagedTimer > 0 ||
+              isTargetWithinBotVisionCone(
+                bot.group.position,
+                bot.group.rotation.y,
+                other.group.position,
+                diffProfile.fovCosine
+              );
+            if (!inCone) continue;
+
             const otherEye = new THREE.Vector3(
               other.group.position.x,
               other.group.position.y + 1.48,
               other.group.position.z
             );
-            const visible = d < 52 && checkBotLineOfSight(bot.group.position, otherEye);
-            if (visible) {
-              if (d < bestVisibleDist) {
+            if (checkBotLineOfSight(bot.group.position, otherEye)) {
+              visibleEnemyCount++;
+              // Prioriza inimigos mais próximos ou já engajados pelo bot
+              const priorityDist =
+                brain.currentTargetId === `BOT_${other.id}` ? d * 0.82 : d;
+              if (priorityDist < bestVisibleDist) {
                 bestVisibleDist = d;
                 bestEnemyBot = other;
                 targetIsPlayer = false;
               }
-            } else if (d < bestHiddenDist) {
-              bestHiddenDist = d;
-              bestHiddenEnemyBot = other;
-              hiddenTargetIsPlayer = false;
             }
           }
         }
 
-        // Testa o jogador vivo (se for da equipe adversária) com igual prioridade
         if (!player.isDead && player.team !== bot.team) {
           const distToPlayer = bot.group.position.distanceTo(player.pos);
-          const playerVisible =
-            distToPlayer < 52 && checkBotLineOfSight(bot.group.position, player.pos);
-          if (playerVisible) {
-            if (distToPlayer < bestVisibleDist) {
-              bestVisibleDist = distToPlayer;
-              bestEnemyBot = null;
-              targetIsPlayer = true;
+          if (distToPlayer <= 58) {
+            const inCone =
+              brain.recentlyDamagedTimer > 0 ||
+              isTargetWithinBotVisionCone(
+                bot.group.position,
+                bot.group.rotation.y,
+                player.pos,
+                diffProfile.fovCosine
+              );
+            if (inCone && checkBotLineOfSight(bot.group.position, player.pos)) {
+              visibleEnemyCount++;
+              const priorityDist =
+                brain.currentTargetId === 'PLAYER' ? distToPlayer * 0.82 : distToPlayer;
+              if (priorityDist < bestVisibleDist) {
+                bestVisibleDist = distToPlayer;
+                bestEnemyBot = null;
+                targetIsPlayer = true;
+              }
             }
-          } else if (distToPlayer < bestHiddenDist) {
-            bestHiddenDist = distToPlayer;
-            bestHiddenEnemyBot = null;
-            hiddenTargetIsPlayer = true;
           }
         }
 
         const hasLOS = bestVisibleDist < Infinity;
-        if (!hasLOS) {
-          bestEnemyBot = bestHiddenEnemyBot;
-          targetIsPlayer = hiddenTargetIsPlayer;
-        }
+        const spottedId = hasLOS
+          ? targetIsPlayer
+            ? 'PLAYER'
+            : bestEnemyBot
+            ? `BOT_${bestEnemyBot.id}`
+            : null
+          : null;
 
-        const combatTargetPos = targetIsPlayer
-          ? player.pos
-          : bestEnemyBot
-          ? bestEnemyBot.group.position
-          : bot.patrolGoal;
+        // 2. ATUALIZAÇÃO DE MEMÓRIA DE COMBATE, TEMPO DE REAÇÃO HUMANO E COMUNICAÇÃO SILENCIOSA DE EQUIPE
+        if (hasLOS && spottedId) {
+          const targetWorldPos = targetIsPlayer
+            ? player.pos
+            : bestEnemyBot!.group.position;
 
-        // 2. NAVEGAÇÃO TÁTICA POR WAYPOINTS QUANDO SEM LINHA DE VISÃO (LOS)
-        bot.waypointTimer -= dt;
-        const distToGoal = Math.hypot(
-          bot.patrolGoal.x - bot.group.position.x,
-          bot.patrolGoal.z - bot.group.position.z
-        );
+          if (brain.currentTargetId !== spottedId) {
+            brain.currentTargetId = spottedId;
+            // Tempo de reação humano ao avistar novo alvo conforme dificuldade (Fácil, Normal, Difícil)
+            brain.targetAcquisitionTimer =
+              diffProfile.reactionDelayMin +
+              Math.random() *
+                (diffProfile.reactionDelayMax - diffProfile.reactionDelayMin);
+          } else if (brain.targetAcquisitionTimer > 0) {
+            brain.targetAcquisitionTimer = Math.max(0, brain.targetAcquisitionTimer - dt);
+          }
 
-        if (!hasLOS && (distToGoal < 2.4 || bot.waypointTimer <= 0)) {
-          // Escolhe um waypoint 3D que aproxime o bot da posição do inimigo mais próximo (incluindo escadarias e lajes)
-          let bestWpIdx = (bot.waypointIndex + 1) % activeWaypoints.length;
-          let bestScore = Infinity;
-          for (let w = 0; w < activeWaypoints.length; w++) {
-            const wp = activeWaypoints[w];
-            const dFromBot = Math.hypot(
-              wp[0] - bot.group.position.x,
-              wp[2] - bot.group.position.z
-            );
-            if (dFromBot < 2.2) continue;
-            const dToEnemy = Math.hypot(
-              wp[0] - combatTargetPos.x,
-              wp[2] - combatTargetPos.z
-            );
-            const score = dToEnemy * 0.75 + dFromBot * 0.45 + Math.random() * 4.5;
-            if (score < bestScore) {
-              bestScore = score;
-              bestWpIdx = w;
+          brain.lastTargetPos.copy(targetWorldPos);
+          brain.hasLastTargetPos = true;
+          brain.lastSeenTimestamp = matchBlackboard.elapsedTime;
+
+          // Compartilha silenciosamente no Blackboard da equipe e registra atividade no setor para adaptação nos 7 rounds
+          recordKnownEnemyInBlackboard(
+            teamBB,
+            spottedId,
+            targetWorldPos,
+            targetIsPlayer ? player.vel : _zeroVel,
+            matchBlackboard.elapsedTime,
+            bot.id,
+            true
+          );
+
+          const enemyTeam: TeamSide = bot.team === 'CT' ? 'TR' : 'CT';
+          const spottedSector = classifySector(targetWorldPos.x, targetWorldPos.z);
+          matchBlackboard.crossRound.enemySectorActivity[enemyTeam][spottedSector] += dt * 0.45;
+        } else {
+          // Sem LOS: verifica percepção sonora (tiros recentes) ou memória tática compartilhada (NUNCA lê posição real oculta!)
+          if (
+            brain.hasLastTargetPos &&
+            matchBlackboard.elapsedTime - brain.lastSeenTimestamp >
+              diffProfile.memoryDurationSec
+          ) {
+            brain.hasLastTargetPos = false;
+            brain.currentTargetId = null;
+          }
+
+          // Escuta disparos recentes de inimigos dentro do alcance auditivo
+          for (let s = matchBlackboard.soundEvents.length - 1; s >= 0; s--) {
+            const snd = matchBlackboard.soundEvents[s];
+            if (snd.team === bot.team) continue;
+            if (matchBlackboard.elapsedTime - snd.timestamp > 2.2) continue;
+
+            const distToSound = bot.group.position.distanceTo(snd.position);
+            const effectiveHearing =
+              (diffProfile.soundHearingRange * snd.loudness) / 45.0;
+            if (distToSound <= effectiveHearing) {
+              if (
+                !brain.hasLastTargetPos ||
+                matchBlackboard.elapsedTime - brain.lastSeenTimestamp > 1.8
+              ) {
+                const noise = diffProfile.soundNoiseRadius;
+                brain.lastTargetPos.set(
+                  snd.position.x + (Math.random() - 0.5) * noise,
+                  snd.position.y,
+                  snd.position.z + (Math.random() - 0.5) * noise
+                );
+                brain.hasLastTargetPos = true;
+                brain.lastSeenTimestamp = snd.timestamp;
+                if (brain.state === 'PATROL' || brain.state === 'TACTICAL_ADVANCE') {
+                  brain.state = 'INVESTIGATE_SOUND';
+                  brain.stateTimer = 3.2;
+                }
+              }
+              break;
             }
           }
-          bot.waypointIndex = bestWpIdx;
-          const chosenWp = activeWaypoints[bestWpIdx] || [0, 0, 0];
-          bot.patrolGoal.set(
-            chosenWp[0] + (Math.random() - 0.5) * 1.8,
-            chosenWp[1],
-            chosenWp[2] + (Math.random() - 0.5) * 1.8
-          );
-          bot.waypointTimer = 3.2 + Math.random() * 2.4;
+
+          // Se não ouviu nada nem tem memória própria recente, consulta o Blackboard da equipe
+          // Filtro estrito: compartilha apenas percepções visualizadas nos últimos 3 segundos (<= 3.0s)
+          if (!brain.hasLastTargetPos && teamBB.knownEnemies.size > 0) {
+            let closestTeamMemDistSq = Infinity;
+            teamBB.knownEnemies.forEach((mem) => {
+              if (matchBlackboard.elapsedTime - mem.lastSeenTime <= 3.0) {
+                const distSq = bot.group.position.distanceToSquared(mem.lastKnownPos);
+                if (distSq < closestTeamMemDistSq) {
+                  closestTeamMemDistSq = distSq;
+                  brain.lastTargetPos
+                    .copy(mem.lastKnownPos)
+                    .addScaledVector(mem.estimatedVelocity, 0.35);
+                  brain.hasLastTargetPos = true;
+                  brain.lastSeenTimestamp = mem.lastSeenTime;
+                }
+              }
+            });
+          }
         }
 
-        // Se tem LOS, olha e se move em relação ao inimigo visível; se não tem LOS, navega pelo Waypoint
-        const moveGoalPos = hasLOS ? combatTargetPos : bot.patrolGoal;
-        const lookGoalPos = hasLOS ? combatTargetPos : bot.patrolGoal;
+        // 3. AVALIAÇÃO TÁTICA (FSM + UTILITY AI): Cobertura, Peeking, Flanco, Suporte e Recuo
+        brain.stateTimer -= dt;
+        brain.decisionTickTimer -= dt;
 
-        bot.group.lookAt(lookGoalPos.x, bot.group.position.y, lookGoalPos.z);
+        const myTeamAlive = bot.team === 'CT' ? aliveCtCount : aliveTrCount;
+        const enemyTeamAlive = bot.team === 'CT' ? aliveTrCount : aliveCtCount;
+        const isLowHp = bot.hp <= brain.archetype.retreatHpThreshold;
+        const isUnderHeavyThreat =
+          visibleEnemyCount >= 2 || (brain.recentlyDamagedTimer > 0 && bot.hp < 65);
 
-        const combatDist = Math.hypot(
-          combatTargetPos.x - bot.group.position.x,
-          combatTargetPos.z - bot.group.position.z
+        const activeThreatPos = hasLOS
+          ? targetIsPlayer
+            ? player.pos
+            : bestEnemyBot!.group.position
+          : brain.hasLastTargetPos
+          ? brain.lastTargetPos
+          : null;
+
+        if (brain.decisionTickTimer <= 0) {
+          brain.decisionTickTimer = 0.14 + Math.random() * 0.06;
+
+          if (hasLOS && activeThreatPos) {
+            // Se está com pouca vida ou sob fogo múltiplo, busca cobertura 3D ou recua taticamente
+            const shouldSeekCover =
+              (isLowHp ||
+                isUnderHeavyThreat ||
+                (bot.burstShotsLeft <= 0 &&
+                  bot.attackCooldown > 0.25 &&
+                  Math.random() < 0.55 * diffProfile.coverUsageWeight)) &&
+              mapTopology !== null;
+
+            if (shouldSeekCover && mapTopology) {
+              const bestCover = selectBestCoverNode(
+                bot.id,
+                bot.group.position,
+                activeThreatPos,
+                mapTopology,
+                teamBB,
+                checkWorldLineOfSight,
+                isLowHp
+              );
+              if (bestCover) {
+                brain.activeCoverNodeId = bestCover.id;
+                teamBB.reservedCoverNodes.set(bestCover.id, bot.id);
+                brain.state = isLowHp ? 'RETREAT' : 'SEEK_COVER';
+                brain.isPeekingOut = false;
+                brain.peekPhaseTimer = 0.65 + Math.random() * 0.45;
+              } else {
+                brain.state = isLowHp ? 'RETREAT' : 'ENGAGE';
+              }
+            } else if (
+              brain.activeCoverNodeId !== null &&
+              mapTopology &&
+              diffProfile.peekFrequencyWeight >= 0.8
+            ) {
+              const cov = mapTopology.coverNodes[brain.activeCoverNodeId];
+              if (cov && bot.group.position.distanceTo(cov.position) < 2.4) {
+                brain.state = 'PEEK_FIRE';
+              } else {
+                brain.state = 'ENGAGE';
+              }
+            } else {
+              brain.state = 'ENGAGE';
+            }
+          } else {
+            // Sem visão direta: verifica se um aliado próximo pediu suporte sob fogo
+            const allyNeedsHelp =
+              teamBB.allyUnderFireId !== null &&
+              teamBB.allyUnderFireId !== bot.id &&
+              teamBB.allyUnderFirePos !== null &&
+              matchBlackboard.elapsedTime - teamBB.allyUnderFireTime < 3.2 &&
+              bot.group.position.distanceTo(teamBB.allyUnderFirePos) < 26;
+
+            if (isLowHp && brain.hasLastTargetPos) {
+              brain.state = 'RETREAT';
+            } else if (
+              brain.state === 'SEEK_COVER' &&
+              brain.activeCoverNodeId !== null &&
+              brain.hasLastTargetPos &&
+              mapTopology
+            ) {
+              const cov = mapTopology.coverNodes[brain.activeCoverNodeId];
+              if (cov && bot.group.position.distanceTo(cov.position) < 1.35) {
+                // Chegou na cobertura: inicia ciclo de Peeking Tático!
+                brain.state = 'PEEK_FIRE';
+                brain.isPeekingOut = true;
+                brain.peekPhaseTimer = 0.95 + Math.random() * 0.45;
+                brain.peekSide = Math.random() > 0.5 ? 'left' : 'right';
+              }
+            } else if (allyNeedsHelp && brain.role !== 'sniper') {
+              brain.state = 'SUPPORT_ALLY';
+            } else if (brain.hasLastTargetPos) {
+              if (
+                brain.role === 'flanker' ||
+                (myTeamAlive > enemyTeamAlive && brain.role === 'entry')
+              ) {
+                brain.state = 'FLANK';
+              } else {
+                brain.state = 'INVESTIGATE_SOUND';
+              }
+            } else {
+              brain.state =
+                brain.role === 'defender' || brain.role === 'sniper'
+                  ? 'PATROL'
+                  : 'TACTICAL_ADVANCE';
+            }
+          }
+        }
+
+        // 4. NAVEGAÇÃO EM GRAFO CONECTADO (A*) E POSICIONAMENTO DE COBERTURA / PEEKING
+        bot.waypointTimer -= dt;
+        let moveGoalPos = bot.patrolGoal;
+        let lookGoalPos = activeThreatPos || bot.patrolGoal;
+
+        if (
+          (brain.state === 'SEEK_COVER' || brain.state === 'RETREAT') &&
+          brain.activeCoverNodeId !== null &&
+          mapTopology
+        ) {
+          const cov = mapTopology.coverNodes[brain.activeCoverNodeId];
+          if (cov) {
+            moveGoalPos = cov.position;
+            lookGoalPos = activeThreatPos || cov.position;
+          }
+        } else if (
+          brain.state === 'PEEK_FIRE' &&
+          brain.activeCoverNodeId !== null &&
+          mapTopology
+        ) {
+          const cov = mapTopology.coverNodes[brain.activeCoverNodeId];
+          if (cov) {
+            brain.peekPhaseTimer -= dt;
+            if (brain.peekPhaseTimer <= 0) {
+              brain.isPeekingOut = !brain.isPeekingOut;
+              if (brain.isPeekingOut) {
+                brain.peekSide = Math.random() > 0.5 ? 'left' : 'right';
+                brain.peekPhaseTimer =
+                  (0.85 + Math.random() * 0.5) * diffProfile.peekFrequencyWeight;
+              } else {
+                brain.peekPhaseTimer = 0.55 + Math.random() * 0.45;
+              }
+            }
+            moveGoalPos = brain.isPeekingOut
+              ? brain.peekSide === 'left'
+                ? cov.peekLeftPos
+                : cov.peekRightPos
+              : cov.position;
+            lookGoalPos = activeThreatPos || moveGoalPos;
+          }
+        } else if (hasLOS && activeThreatPos) {
+          moveGoalPos = activeThreatPos;
+          lookGoalPos = activeThreatPos;
+        } else {
+          // Navegação pelo Grafo Tático de Waypoints (A*) sem wallhack
+          const distToCurrentWp = Math.hypot(
+            bot.patrolGoal.x - bot.group.position.x,
+            bot.patrolGoal.z - bot.group.position.z
+          );
+
+          if (distToCurrentWp < 2.1 || bot.waypointTimer <= 0) {
+            if (mapTopology && mapTopology.nodes.length > 0) {
+              if (brain.pathQueue.length === 0) {
+                const currentNearestIdx = findNearestWaypointIndex(
+                  mapTopology,
+                  bot.group.position
+                );
+                const hintPos =
+                  brain.state === 'SUPPORT_ALLY' && teamBB.allyUnderFirePos
+                    ? teamBB.allyUnderFirePos
+                    : brain.hasLastTargetPos
+                    ? brain.lastTargetPos
+                    : null;
+
+                const strategicGoalIdx = selectStrategicGoalWaypoint(
+                  bot.id,
+                  bot.team,
+                  bot.group.position,
+                  brain,
+                  mapTopology,
+                  teamBB,
+                  hintPos
+                );
+
+                const avoidDanger =
+                  brain.state === 'FLANK' ||
+                  brain.state === 'RETREAT' ||
+                  brain.archetype.caution > 0.6;
+
+                brain.pathQueue = findTacticalPath(
+                  mapTopology,
+                  currentNearestIdx,
+                  strategicGoalIdx,
+                  avoidDanger
+                    ? (nodePos) => {
+                        let penalty = 0;
+                        for (let h = 0; h < teamBB.dangerHotspots.length; h++) {
+                          const d = nodePos.distanceTo(teamBB.dangerHotspots[h].position);
+                          if (d < 9.0) penalty += (9.0 - d) * 2.2;
+                        }
+                        return penalty;
+                      }
+                    : undefined
+                );
+              }
+
+              const nextWpIdx =
+                brain.pathQueue.shift() ??
+                (bot.waypointIndex + 1) % mapTopology.nodes.length;
+              bot.waypointIndex = nextWpIdx;
+              const chosenNode = mapTopology.nodes[nextWpIdx];
+              if (chosenNode) {
+                bot.patrolGoal.set(
+                  chosenNode.position.x + (Math.random() - 0.5) * 1.3,
+                  chosenNode.position.y,
+                  chosenNode.position.z + (Math.random() - 0.5) * 1.3
+                );
+              }
+              bot.waypointTimer = 2.8 + Math.random() * 1.8;
+            }
+          }
+
+          moveGoalPos = bot.patrolGoal;
+          // Olha para a posição suspeita (pre-aim) quando próximo, ou para a direção de avanço
+          if (
+            brain.hasLastTargetPos &&
+            bot.group.position.distanceTo(brain.lastTargetPos) < 22
+          ) {
+            lookGoalPos = brain.lastTargetPos;
+          } else {
+            lookGoalPos = bot.patrolGoal;
+          }
+        }
+
+        // Rotação horizontal humanizada e suave (sem snap instantâneo robótico)
+        brain.aimYaw = smoothBotYawTowards(
+          bot.group.rotation.y,
+          lookGoalPos.x,
+          lookGoalPos.z,
+          bot.group.position.x,
+          bot.group.position.z,
+          hasLOS ? diffProfile.aimTurnSpeed : diffProfile.aimTurnSpeed * 0.78,
+          dt
         );
+        bot.group.rotation.y = brain.aimYaw;
+
+        const combatDist = activeThreatPos
+          ? Math.hypot(
+              activeThreatPos.x - bot.group.position.x,
+              activeThreatPos.z - bot.group.position.z
+            )
+          : Math.hypot(
+              moveGoalPos.x - bot.group.position.x,
+              moveGoalPos.z - bot.group.position.z
+            );
 
         bot.strafeTimer -= dt;
         if (bot.strafeTimer <= 0) {
           bot.strafeDir *= -1;
-          bot.strafeTimer = 0.75 + Math.random() * 1.1;
+          bot.strafeTimer = 0.65 + Math.random() * 0.95;
         }
 
-        // 3. MOVIMENTAÇÃO CONTÍNUA COM STRAFE EM COMBATE E SENSORES DE DESVIO DE PAREDES
+        // 5. MOVIMENTAÇÃO FÍSICA COM CONTROLE DE DISTÂNCIA POR ARMA/PAPEL, STRAFE E ANTI-TRAVAMENTO
         _toTarget.set(
           moveGoalPos.x - bot.group.position.x,
           0,
@@ -1678,19 +2501,25 @@ export default function App() {
         const moveDist = _toTarget.length();
         if (moveDist > 0.001) _toTarget.divideScalar(moveDist);
 
-        // Em combate com LOS: avança se longe (>13m), recua se muito perto (<5.5m) e faz strafe lateral constante!
         let forwardWeight = 1.0;
-        let strafeWeight = 0.35;
-        if (hasLOS) {
-          if (combatDist > 13.5) {
-            forwardWeight = 0.85;
-            strafeWeight = 0.65;
-          } else if (combatDist < 5.5) {
-            forwardWeight = -0.65;
-            strafeWeight = 0.95;
+        let strafeWeight = 0.25;
+
+        if (brain.state === 'SEEK_COVER' || brain.state === 'PEEK_FIRE') {
+          forwardWeight = moveDist > 0.45 ? 1.0 : 0.0;
+          strafeWeight = hasLOS ? 0.45 : 0.1;
+        } else if (hasLOS) {
+          const prefDist = wProf.optimalRange;
+          const minComfort = wProf.minComfortRange;
+          if (brain.state === 'RETREAT' || combatDist < minComfort) {
+            forwardWeight = -0.82;
+            strafeWeight = 0.92;
+          } else if (combatDist > prefDist + 4.5) {
+            forwardWeight = 0.85 * brain.archetype.aggressiveness;
+            strafeWeight = 0.72;
           } else {
-            forwardWeight = 0.18;
-            strafeWeight = 0.98;
+            // Na distância ideal da arma: strafe lateral tático intenso
+            forwardWeight = 0.12;
+            strafeWeight = 1.0;
           }
         }
 
@@ -1700,18 +2529,36 @@ export default function App() {
         let desiredDirX = _toTarget.x * forwardWeight + strafeVecX * strafeWeight;
         let desiredDirZ = _toTarget.z * forwardWeight + strafeVecZ * strafeWeight;
 
-        // Repulsão suave entre bots para nunca empilharem no mesmo ponto
+        // Espaçamento tático de esquadrão: evita que aliados fiquem colados na mesma porta/corredor
         for (let k = 0; k < bots.length; k++) {
           if (k === i) continue;
           const otherBot = bots[k];
           const sepX = bot.group.position.x - otherBot.group.position.x;
           const sepZ = bot.group.position.z - otherBot.group.position.z;
           const sepDistSq = sepX * sepX + sepZ * sepZ;
-          if (sepDistSq > 0.0001 && sepDistSq < 1.8) {
+          const minSepSq = otherBot.team === bot.team ? 3.2 : 1.8;
+          if (sepDistSq > 0.0001 && sepDistSq < minSepSq) {
             const sepDist = Math.sqrt(sepDistSq);
-            desiredDirX += (sepX / sepDist) * 0.85;
-            desiredDirZ += (sepZ / sepDist) * 0.85;
+            const pushStrength = otherBot.team === bot.team ? 1.05 : 0.85;
+            desiredDirX += (sepX / sepDist) * pushStrength;
+            desiredDirZ += (sepZ / sepDist) * pushStrength;
           }
+        }
+
+        // Detecção anti-travamento (Unstuck Recovery) caso o bot fique preso em quina ou rampa
+        const movedSinceLast = bot.group.position.distanceTo(brain.lastPosition);
+        brain.lastPosition.copy(bot.group.position);
+        if (movedSinceLast < 0.015 && (Math.abs(forwardWeight) > 0.2 || moveDist > 1.2)) {
+          brain.stuckTimer += dt;
+          if (brain.stuckTimer > 0.55) {
+            brain.unstuckDir *= -1;
+            bot.strafeDir = brain.unstuckDir;
+            brain.pathQueue.length = 0;
+            bot.waypointTimer = 0;
+            brain.stuckTimer = 0;
+          }
+        } else {
+          brain.stuckTimer = Math.max(0, brain.stuckTimer - dt * 0.5);
         }
 
         const desiredLen = Math.hypot(desiredDirX, desiredDirZ);
@@ -1720,70 +2567,81 @@ export default function App() {
           desiredDirZ /= desiredLen;
         }
 
-        // Testa sensores angulares (Whiskers) para desviar de paredes e caixas sem travar
+        // Sensores angulares (Whiskers) para contornar obstáculos e subir rampas/escadas
         const baseAngle = Math.atan2(desiredDirX, desiredDirZ);
         const stepDist = bot.speed * dt;
         let movedBot = false;
 
-        for (let a = 0; a < STEER_ANGLES.length; a++) {
-          const testAngle = baseAngle + STEER_ANGLES[a] * bot.strafeDir;
-          const dirX = Math.sin(testAngle);
-          const dirZ = Math.cos(testAngle);
-          const candidateX = bot.group.position.x + dirX * stepDist;
-          const candidateZ = bot.group.position.z + dirZ * stepDist;
-          const probeX = bot.group.position.x + dirX * 0.95;
-          const probeZ = bot.group.position.z + dirZ * 0.95;
+        if (desiredLen > 0.05) {
+          for (let a = 0; a < STEER_ANGLES.length; a++) {
+            const testAngle = baseAngle + STEER_ANGLES[a] * bot.strafeDir;
+            const dirX = Math.sin(testAngle);
+            const dirZ = Math.cos(testAngle);
+            const candidateX = bot.group.position.x + dirX * stepDist;
+            const candidateZ = bot.group.position.z + dirZ * stepDist;
+            const probeX = bot.group.position.x + dirX * 0.92;
+            const probeZ = bot.group.position.z + dirZ * 0.92;
 
-          const candGroundY = getGroundElevationAt(
-            candidateX,
-            candidateZ,
-            bot.group.position.y,
-            elevationZones
-          );
-          const probeGroundY = getGroundElevationAt(
-            probeX,
-            probeZ,
-            bot.group.position.y,
-            elevationZones
-          );
-
-          if (
-            !collidesWithWorld(candidateX, candidateZ, 0.56, candGroundY + 1.72) &&
-            !collidesWithWorld(probeX, probeZ, 0.56, probeGroundY + 1.72)
-          ) {
-            bot.group.position.x = candidateX;
-            bot.group.position.z = candidateZ;
-            bot.group.position.y = THREE.MathUtils.damp(
+            const candGroundY = getGroundElevationAt(
+              candidateX,
+              candidateZ,
               bot.group.position.y,
-              candGroundY,
-              18,
-              dt
+              elevationZones
             );
-            movedBot = true;
-            if (a > 2 && !hasLOS) {
-              bot.waypointTimer = Math.min(bot.waypointTimer, 0.6);
-            }
-            break;
-          }
-        }
+            const probeGroundY = getGroundElevationAt(
+              probeX,
+              probeZ,
+              bot.group.position.y,
+              elevationZones
+            );
 
-        // Fallback deslizante nos eixos X/Z caso o bot esteja num canto apertado
-        if (!movedBot) {
-          const tryX = bot.group.position.x + desiredDirX * stepDist;
-          const tryZ = bot.group.position.z + desiredDirZ * stepDist;
-          const gx = getGroundElevationAt(tryX, bot.group.position.z, bot.group.position.y, elevationZones);
-          const gz = getGroundElevationAt(bot.group.position.x, tryZ, bot.group.position.y, elevationZones);
-          if (!collidesWithWorld(tryX, bot.group.position.z, 0.55, gx + 1.72)) {
-            bot.group.position.x = tryX;
-            bot.group.position.y = gx;
-            movedBot = true;
-          } else if (!collidesWithWorld(bot.group.position.x, tryZ, 0.55, gz + 1.72)) {
-            bot.group.position.z = tryZ;
-            bot.group.position.y = gz;
-            movedBot = true;
-          } else {
-            bot.strafeDir *= -1;
-            bot.waypointTimer = 0;
+            if (
+              !collidesWithWorld(candidateX, candidateZ, 0.56, candGroundY + 1.72) &&
+              !collidesWithWorld(probeX, probeZ, 0.56, probeGroundY + 1.72)
+            ) {
+              bot.group.position.x = candidateX;
+              bot.group.position.z = candidateZ;
+              bot.group.position.y = THREE.MathUtils.damp(
+                bot.group.position.y,
+                candGroundY,
+                18,
+                dt
+              );
+              movedBot = true;
+              if (a > 2 && !hasLOS) {
+                bot.waypointTimer = Math.min(bot.waypointTimer, 0.65);
+              }
+              break;
+            }
+          }
+
+          if (!movedBot) {
+            const tryX = bot.group.position.x + desiredDirX * stepDist;
+            const tryZ = bot.group.position.z + desiredDirZ * stepDist;
+            const gx = getGroundElevationAt(
+              tryX,
+              bot.group.position.z,
+              bot.group.position.y,
+              elevationZones
+            );
+            const gz = getGroundElevationAt(
+              bot.group.position.x,
+              tryZ,
+              bot.group.position.y,
+              elevationZones
+            );
+            if (!collidesWithWorld(tryX, bot.group.position.z, 0.55, gx + 1.72)) {
+              bot.group.position.x = tryX;
+              bot.group.position.y = gx;
+              movedBot = true;
+            } else if (!collidesWithWorld(bot.group.position.x, tryZ, 0.55, gz + 1.72)) {
+              bot.group.position.z = tryZ;
+              bot.group.position.y = gz;
+              movedBot = true;
+            } else {
+              bot.strafeDir *= -1;
+              bot.waypointTimer = 0;
+            }
           }
         }
 
@@ -1796,15 +2654,23 @@ export default function App() {
           bot.rightArm.rotation.x = -0.75 - Math.sin(bot.walkCycle) * 0.18;
         }
 
-        // 4. SISTEMA DE RAJADAS TÁTICAS (BURST FIRE) + RASTROS DE BALA 3D (TRACERS)
-        if ((targetIsPlayer || bestEnemyBot) && hasLOS && combatDist < 50) {
+        // 6. SISTEMA DE DISPARO TÁTICO BASEADO EM PERFIL DE ARMA, DIFICULDADE E TEMPO DE REAÇÃO
+        if (
+          (targetIsPlayer || bestEnemyBot) &&
+          hasLOS &&
+          combatDist < wProf.maxEffectiveRange &&
+          brain.targetAcquisitionTimer <= 0
+        ) {
           if (bot.burstShotsLeft > 0) {
             bot.burstShotTimer -= dt;
             if (bot.burstShotTimer <= 0) {
               bot.burstShotsLeft--;
-              bot.burstShotTimer = 0.13 + Math.random() * 0.05;
+              bot.burstShotTimer = wProf.shotInterval * (0.9 + Math.random() * 0.25);
               if (bot.burstShotsLeft <= 0) {
-                bot.attackCooldown = 0.62 + Math.random() * 0.55;
+                const rawPause =
+                  wProf.burstPauseMin +
+                  Math.random() * (wProf.burstPauseMax - wProf.burstPauseMin);
+                bot.attackCooldown = rawPause * diffProfile.burstCooldownMultiplier;
               }
 
               bot.muzzleFlash.visible = true;
@@ -1817,13 +2683,33 @@ export default function App() {
               const distFromPlayerCam = muzzleWorld.distanceTo(camera.position);
               audioRef.current.playBotGunshot(distFromPlayerCam, bot.team === 'CT');
 
+              // Emite evento sonoro real no Blackboard para que bots adversários percebam o tiro
+              registerTacticalSoundEvent(
+                matchBlackboard,
+                bot.group.position,
+                bot.team,
+                wProf.soundLoudness
+              );
+
               const tracerColor = bot.team === 'CT' ? 0x60a5fa : 0xfbbf24;
 
+              // Cálculo justo de precisão: considera dificuldade, distância, perfil da arma e movimento
+              const distAccuracyFactor = Math.max(
+                0.24,
+                1 - combatDist / (wProf.maxEffectiveRange * 1.28)
+              );
+              const botMovingPenalty = movedBot ? 0.85 : 1.08;
+
               if (targetIsPlayer) {
-                // Probabilidade de acerto tática equilibrada (recompensa strafe e distância)
                 const isPlayerMoving = _moveDir.lengthSq() > 0.1;
-                const distFactor = Math.max(0.28, 1 - combatDist / 62);
-                const hitChance = distFactor * (isPlayerMoving ? 0.52 : 0.72);
+                const targetEvasionFactor = isPlayerMoving ? 0.76 : 1.0;
+                const hitChance = Math.min(
+                  0.86,
+                  (diffProfile.baseHitChance + wProf.accuracyBonus) *
+                    distAccuracyFactor *
+                    botMovingPenalty *
+                    targetEvasionFactor
+                );
                 const didHitPlayer = Math.random() < hitChance;
 
                 if (didHitPlayer) {
@@ -1835,7 +2721,18 @@ export default function App() {
                   spawnBulletTracer(muzzleWorld, hitEnd, tracerColor);
 
                   audioRef.current.playPlayerDamage();
-                  const rawDamage = 8 + Math.floor(Math.random() * 6);
+                  const rawDamage = Math.max(
+                    6,
+                    Math.round(
+                      (wProf.baseDamage * 0.58 +
+                        Math.random() * wProf.damageVariance * 0.6) *
+                        (gameRef.current.botDifficulty === 'easy'
+                          ? 0.78
+                          : gameRef.current.botDifficulty === 'hard'
+                          ? 1.12
+                          : 0.95)
+                    )
+                  );
                   if (player.armor > 0) {
                     const absorbed = Math.min(player.armor, Math.ceil(rawDamage * 0.5));
                     player.armor -= absorbed;
@@ -1843,6 +2740,16 @@ export default function App() {
                   } else {
                     player.hp = Math.max(0, player.hp - rawDamage);
                   }
+
+                  playerDamagedByKeys.add(bot.name);
+                  const bStats = matchStatsMap.get(bot.name);
+                  if (bStats) bStats.damageDealt += rawDamage;
+
+                  // Notifica bots aliados do jogador que o jogador está sob fogo
+                  const playerTeamBB = matchBlackboard.teams[player.team];
+                  playerTeamBB.allyUnderFireId = 0;
+                  playerTeamBB.allyUnderFirePos = player.pos.clone();
+                  playerTeamBB.allyUnderFireTime = matchBlackboard.elapsedTime;
 
                   setDamageFlash(true);
                   setTimeout(() => setDamageFlash(false), 140);
@@ -1852,6 +2759,23 @@ export default function App() {
                     player.zoomLevel = 0;
                     player.targetFov = 75;
                     if (weaponGroup) weaponGroup.visible = false;
+
+                    registerTacticalDeathEvent(
+                      matchBlackboard,
+                      player.team,
+                      player.pos,
+                      bot.group.position,
+                      `BOT_${bot.id}`
+                    );
+                    purgeEnemyFromBlackboards(matchBlackboard, 'PLAYER');
+
+                    recordCombatKillAndAssists(
+                      bot.name,
+                      'PLAYER',
+                      playerDamagedByKeys,
+                      300,
+                      false
+                    );
 
                     pushKillfeed(
                       bot.name,
@@ -1883,7 +2807,7 @@ export default function App() {
                   spawnImpactSparks(missEnd, new THREE.Vector3(0, 1, 0), tracerColor);
                 }
               } else if (bestEnemyBot) {
-                // Combate Tático Bot vs Bot com Tracer 3D (respeitando altura das lajes)
+                // Combate Tático Bot vs Bot com Tracer 3D e suporte de esquadrão
                 const botTargetCenter = new THREE.Vector3(
                   bestEnemyBot.group.position.x + (Math.random() - 0.5) * 0.45,
                   bestEnemyBot.group.position.y + 1.25 + (Math.random() - 0.5) * 0.35,
@@ -1891,19 +2815,74 @@ export default function App() {
                 );
                 spawnBulletTracer(muzzleWorld, botTargetCenter, tracerColor);
 
-                if (Math.random() < 0.62) {
-                  const botDmg = 14 + Math.floor(Math.random() * 10);
-                  const isBotHS = Math.random() < 0.2;
-                  bestEnemyBot.hp -= isBotHS ? botDmg * 2 : botDmg;
+                const botVsBotHitChance = Math.min(
+                  0.84,
+                  (diffProfile.baseHitChance + wProf.accuracyBonus + 0.06) *
+                    distAccuracyFactor
+                );
+
+                if (Math.random() < botVsBotHitChance) {
+                  const botDmg =
+                    wProf.baseDamage + Math.floor(Math.random() * wProf.damageVariance);
+                  const isBotHS = Math.random() < diffProfile.headshotChance;
+                  const appliedBotDmg = Math.round(
+                    isBotHS ? botDmg * wProf.headshotMultiplier : botDmg
+                  );
+                  bestEnemyBot.hp -= appliedBotDmg;
+                  bestEnemyBot.damagedByKeys.add(bot.name);
+                  bestEnemyBot.brain.recentlyDamagedTimer = 2.2;
+                  bestEnemyBot.brain.lastTargetPos.copy(bot.group.position);
+                  bestEnemyBot.brain.hasLastTargetPos = true;
+                  bestEnemyBot.brain.lastSeenTimestamp = matchBlackboard.elapsedTime;
+
+                  // Alerta o Blackboard da equipe da vítima para cobertura e suporte de aliados
+                  const victimTeamBB = matchBlackboard.teams[bestEnemyBot.team];
+                  victimTeamBB.allyUnderFireId = bestEnemyBot.id;
+                  victimTeamBB.allyUnderFirePos = bestEnemyBot.group.position.clone();
+                  victimTeamBB.allyUnderFireTime = matchBlackboard.elapsedTime;
+                  recordKnownEnemyInBlackboard(
+                    victimTeamBB,
+                    `BOT_${bot.id}`,
+                    bot.group.position,
+                    _zeroVel,
+                    matchBlackboard.elapsedTime,
+                    bestEnemyBot.id,
+                    true
+                  );
+
+                  const bStats = matchStatsMap.get(bot.name);
+                  if (bStats) bStats.damageDealt += appliedBotDmg;
+
                   bestEnemyBot.hitFlashTimer = 0.11;
                   bestEnemyBot.bodyMat.color.setHex(0xffffff);
                   bestEnemyBot.bodyMat.emissive.setHex(0x552222);
                   spawnImpactSparks(botTargetCenter, new THREE.Vector3(0, 1, 0), 0xef4444);
 
                   if (bestEnemyBot.hp <= 0) {
+                    registerTacticalDeathEvent(
+                      matchBlackboard,
+                      bestEnemyBot.team,
+                      bestEnemyBot.group.position,
+                      bot.group.position,
+                      `BOT_${bot.id}`
+                    );
+                    purgeEnemyFromBlackboards(matchBlackboard, `BOT_${bestEnemyBot.id}`);
+                    victimTeamBB.reservedCoverNodes.forEach((bId, cId) => {
+                      if (bId === bestEnemyBot!.id) victimTeamBB.reservedCoverNodes.delete(cId);
+                    });
+                    victimTeamBB.assignedWaypointGoals.delete(bestEnemyBot.id);
+
                     scene.remove(bestEnemyBot.group);
                     const deadIdx = bots.indexOf(bestEnemyBot);
                     if (deadIdx !== -1) bots.splice(deadIdx, 1);
+
+                    recordCombatKillAndAssists(
+                      bot.name,
+                      bestEnemyBot.name,
+                      bestEnemyBot.damagedByKeys,
+                      isBotHS ? 450 : 300,
+                      isBotHS
+                    );
 
                     pushKillfeed(
                       bot.name,
@@ -1922,7 +2901,9 @@ export default function App() {
           } else {
             bot.attackCooldown -= dt;
             if (bot.attackCooldown <= 0) {
-              bot.burstShotsLeft = 2 + (Math.random() > 0.45 ? 1 : 0);
+              bot.burstShotsLeft =
+                wProf.burstMin +
+                Math.floor(Math.random() * (wProf.burstMax - wProf.burstMin + 1));
               bot.burstShotTimer = 0;
             }
           }
@@ -1989,7 +2970,7 @@ export default function App() {
       if (!gameRef.current.isLocked || player.isDead) return;
       const zoomFactor =
         player.zoomLevel === 2 ? 0.22 : player.zoomLevel === 1 ? 0.45 : 1.0;
-      const sensitivity = 0.0022 * zoomFactor;
+      const sensitivity = 0.0011 * gameRef.current.mouseSensitivity * zoomFactor;
       player.yaw -= e.movementX * sensitivity;
       player.pitch = Math.max(
         -Math.PI / 2.25,
@@ -2035,7 +3016,10 @@ export default function App() {
       } else if (e.code === 'KeyQ' && gameRef.current.gameMode === 'playing') {
         e.preventDefault();
         switchToInventorySlot(player.activeSlotIndex + 1);
-      } else if (e.code === 'KeyB' && gameRef.current.gameMode !== 'title') {
+      } else if (
+        e.code === 'KeyB' &&
+        (gameRef.current.gameMode === 'playing' || gameRef.current.gameMode === 'paused')
+      ) {
         const nextBuy = !gameRef.current.isBuyOpen;
         setIsBuyOpen(nextBuy);
         if (nextBuy) {
@@ -2117,7 +3101,9 @@ export default function App() {
       switchToInventorySlot(player.activeSlotIndex + 1);
     gameRef.current.restartMatch = restartFullMatch;
     gameRef.current.returnToMenu = () => {
+      clearRoundTransitionTimer();
       document.exitPointerLock?.();
+      resetFullMatchState();
       setGameMode('title');
       setMenuTab('main');
       setIsBuyOpen(false);
@@ -2138,6 +3124,7 @@ export default function App() {
     window.addEventListener('resize', onResize);
 
     return () => {
+      clearRoundTransitionTimer();
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
       audioRef.current.stopMusic();
@@ -2243,7 +3230,7 @@ export default function App() {
               {formatRoundClock(hud.roundTimeSec)}
             </span>
             <span className="text-[10px] font-medium text-zinc-400 uppercase tracking-widest">
-              Round {hud.round}
+              Round {hud.round} / {TOTAL_MATCH_ROUNDS}
             </span>
           </div>
 
@@ -2588,12 +3575,51 @@ export default function App() {
                         <div>Jogar 5v5 Agora</div>
                         <div className="text-[11px] font-semibold text-zinc-800 normal-case">
                           {MAP_CATALOG[hud.activeMapId].name} · Equipe:{' '}
-                          {hud.playerTeam === 'CT' ? 'Polícia Militar (PM)' : 'Bandidos'}
+                          {hud.playerTeam === 'CT' ? 'Polícia Militar (PM)' : 'Bandidos'} · IA:{' '}
+                          {BOT_DIFFICULTY_PROFILES[botDifficulty].label}
                         </div>
                       </div>
                     </div>
                     <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                   </button>
+
+                  {/* Seletor de Dificuldade da IA dos Bots (Exclusivo do Menu Principal, Padrão Normal) */}
+                  <div className="px-4 py-3 rounded-xl bg-white/5 border border-white/10 flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <Target className="w-4 h-4 text-amber-400" />
+                        <span className="text-xs font-semibold text-zinc-100">
+                          Dificuldade dos Bots (IA Tática)
+                        </span>
+                      </div>
+                      <span className="text-[11px] font-bold text-amber-400">
+                        {BOT_DIFFICULTY_PROFILES[botDifficulty].label}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {(['easy', 'normal', 'hard'] as BotDifficulty[]).map((level) => {
+                        const prof = BOT_DIFFICULTY_PROFILES[level];
+                        const isSelected = botDifficulty === level;
+                        return (
+                          <button
+                            key={level}
+                            type="button"
+                            onClick={() => updateBotDifficulty(level)}
+                            className={`py-1.5 px-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                              isSelected
+                                ? 'bg-amber-400 text-zinc-950 shadow-sm'
+                                : 'bg-zinc-900/70 hover:bg-white/10 text-zinc-300 border border-white/10'
+                            }`}
+                          >
+                            {prof.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="text-[11px] text-zinc-400 leading-snug">
+                      {BOT_DIFFICULTY_PROFILES[botDifficulty].description}
+                    </div>
+                  </div>
 
                   <button
                     onClick={() => setMenuTab('maps')}
@@ -3045,6 +4071,52 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Configuração de Sensibilidade do Mouse */}
+                <div className="p-4 rounded-2xl bg-white/5 border border-white/10 mb-4 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <label
+                        htmlFor="menu-mouse-sensitivity-slider"
+                        className="text-xs font-bold uppercase tracking-wider text-white block"
+                      >
+                        Sensibilidade do Mouse
+                      </label>
+                      <span className="text-[11px] text-zinc-400">
+                        Velocidade de rotação horizontal e vertical da câmera
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-sm font-black text-amber-400 bg-amber-400/10 border border-amber-400/30 px-2.5 py-1 rounded-lg min-w-[3.2rem] text-center">
+                        {mouseSensitivity.toFixed(1)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => updateMouseSensitivity(DEFAULT_MOUSE_SENSITIVITY)}
+                        className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-semibold text-zinc-300 hover:text-white transition-colors cursor-pointer"
+                      >
+                        Padrão (2.0)
+                      </button>
+                    </div>
+                  </div>
+
+                  <input
+                    id="menu-mouse-sensitivity-slider"
+                    type="range"
+                    min={MIN_MOUSE_SENSITIVITY}
+                    max={MAX_MOUSE_SENSITIVITY}
+                    step={0.1}
+                    value={mouseSensitivity}
+                    onChange={(e) => updateMouseSensitivity(parseFloat(e.target.value))}
+                    className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-amber-400"
+                  />
+
+                  <div className="flex items-center justify-between text-[10px] font-mono text-zinc-400">
+                    <span>Mín: 0.1</span>
+                    <span>Padrão: 2.0</span>
+                    <span>Máx: 10.0</span>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                   <div className="p-3.5 rounded-2xl bg-white/5 border border-white/10 space-y-1.5 text-zinc-300">
                     <div className="font-bold text-white mb-1">Movimentação</div>
@@ -3092,98 +4164,131 @@ export default function App() {
       )}
 
       {/* ========================================================================
-          MODAL DE PAUSA MINIMALISTA (TECLA ESC)
+          MODAL DE PAUSA TÁTICO REFORMULADO (TECLA ESC) — SEM TROCA DE MAPA/EQUIPE
           ======================================================================== */}
       {gameMode === 'paused' && !isBuyOpen && !isCodeModalOpen && (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 backdrop-blur-sm p-6">
-          <div className="max-w-md w-full bg-zinc-950/85 backdrop-blur-xl border border-white/15 rounded-3xl p-7 shadow-2xl text-center">
-            <div className="text-xs font-semibold uppercase tracking-widest text-zinc-400 mb-1">
-              Partida 5v5 · Mapa: {MAP_CATALOG[hud.activeMapId].name}
-            </div>
-            <h2 className="text-2xl font-black text-white mb-2">Jogo Pausado</h2>
-            <div className="inline-flex items-center gap-3 bg-white/5 border border-white/10 rounded-full px-4 py-1 text-xs text-zinc-300 mb-5">
-              <span className="font-bold text-sky-400">PM {hud.ctScore}</span>
-              <span>·</span>
-              <span className="font-mono text-white">{formatRoundClock(hud.roundTimeSec)}</span>
-              <span>·</span>
-              <span className="font-bold text-rose-400">{hud.trScore} BANDIDOS</span>
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/70 backdrop-blur-md p-6">
+          <div className="max-w-md w-full bg-zinc-950/90 backdrop-blur-2xl border border-white/15 rounded-3xl p-7 shadow-2xl">
+            {/* 1. Identificação da Partida e Mapa Bloqueado (Sem pílulas estáticas) */}
+            <div className="text-center border-b border-white/10 pb-5 mb-5">
+              <div className="flex items-center justify-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-zinc-400 mb-1.5">
+                <span className="text-amber-400">{MAP_CATALOG[hud.activeMapId].name}</span>
+                <span aria-hidden="true">·</span>
+                <span>Round {hud.round} de {TOTAL_MATCH_ROUNDS}</span>
+                <span aria-hidden="true">·</span>
+                <span className={hud.playerTeam === 'CT' ? 'text-sky-400' : 'text-rose-400'}>
+                  {hud.playerTeam === 'CT' ? 'Esquadrão PM' : 'Bandidos'}
+                </span>
+              </div>
+
+              <h2 className="text-2xl font-black tracking-tight text-white uppercase">
+                Jogo Pausado
+              </h2>
+
+              <div className="mt-3 flex items-center justify-center gap-5 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold tracking-wider text-sky-400">PM</span>
+                  <span className="font-mono text-lg font-black text-white">{hud.ctScore}</span>
+                </div>
+                <span className="font-mono text-xs text-zinc-400">
+                  {formatRoundClock(hud.roundTimeSec)}
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-lg font-black text-white">{hud.trScore}</span>
+                  <span className="text-xs font-bold tracking-wider text-rose-400">BANDIDOS</span>
+                </div>
+              </div>
             </div>
 
-            <div className="flex flex-col gap-2.5 mb-5">
+            {/* 2. Ações Principais e Configuração em Tempo Real */}
+            <div className="space-y-3.5 mb-5">
               <button
                 onClick={() => gameRef.current.requestLock()}
-                className="w-full py-3 px-5 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                className="w-full py-3.5 px-5 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer"
               >
                 <Play className="w-4 h-4 fill-current" />
                 <span>Continuar Combate</span>
               </button>
 
+              {/* Ajuste de Sensibilidade do Mouse em Tempo Real durante a Partida */}
+              <div className="p-4 rounded-2xl bg-white/[0.04] border border-white/10 text-left space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <label
+                      htmlFor="pause-mouse-sensitivity-slider"
+                      className="text-xs font-bold text-white block"
+                    >
+                      Sensibilidade do Mouse
+                    </label>
+                    <span className="text-[11px] text-zinc-400">
+                      Aplicada em tempo real na rotação da câmera
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs font-black text-amber-400 min-w-[2.4rem] text-right">
+                      {mouseSensitivity.toFixed(1)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => updateMouseSensitivity(DEFAULT_MOUSE_SENSITIVITY)}
+                      className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-semibold text-zinc-300 hover:text-white transition-colors cursor-pointer"
+                    >
+                      Padrão (2.0)
+                    </button>
+                  </div>
+                </div>
+
+                <input
+                  id="pause-mouse-sensitivity-slider"
+                  type="range"
+                  min={MIN_MOUSE_SENSITIVITY}
+                  max={MAX_MOUSE_SENSITIVITY}
+                  step={0.1}
+                  value={mouseSensitivity}
+                  onChange={(e) => updateMouseSensitivity(parseFloat(e.target.value))}
+                  className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-amber-400"
+                />
+
+                <div className="flex items-center justify-between text-[10px] font-mono text-zinc-400">
+                  <span>Mín: 0.1</span>
+                  <span>Padrão: 2.0</span>
+                  <span>Máx: 10.0</span>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-2.5">
                 <button
                   onClick={() => setIsBuyOpen(true)}
-                  className="py-2.5 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-100 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  className="py-3 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-100 font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
                 >
                   <ShoppingBag className="w-4 h-4 text-amber-400" />
-                  <span>Loja [B]</span>
+                  <span>Loja Tática [B]</span>
                 </button>
 
                 <button
                   onClick={() => gameRef.current.restartMatch()}
-                  className="py-2.5 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-100 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  className="py-3 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-100 font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
                 >
                   <RotateCcw className="w-4 h-4 text-zinc-300" />
-                  <span>Reiniciar</span>
-                </button>
-              </div>
-
-              {/* Troca Rápida de Mapa no Menu de Pausa */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {Object.values(MAP_CATALOG).map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => gameRef.current.selectMap(m.id, true)}
-                    className={`py-2 px-2.5 rounded-xl border font-semibold text-xs flex items-center justify-center gap-1 transition-colors cursor-pointer ${
-                      hud.activeMapId === m.id
-                        ? 'bg-amber-400/20 border-amber-400 text-amber-300'
-                        : 'bg-white/5 hover:bg-white/10 border-white/10 text-zinc-300'
-                    }`}
-                  >
-                    <MapPin className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">{m.name}</span>
-                  </button>
-                ))}
-              </div>
-
-              <div className="grid grid-cols-2 gap-2.5">
-                <button
-                  onClick={() => gameRef.current.selectTeamAndStart('CT')}
-                  className="py-2 px-3 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/30 text-sky-300 font-semibold text-xs transition-colors cursor-pointer"
-                >
-                  Jogar como PM
-                </button>
-                <button
-                  onClick={() => gameRef.current.selectTeamAndStart('TR')}
-                  className="py-2 px-3 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/30 text-rose-300 font-semibold text-xs transition-colors cursor-pointer"
-                >
-                  Jogar como Bandido
+                  <span>Reiniciar Partida</span>
                 </button>
               </div>
             </div>
 
-            {/* Controles discretos de áudio + saída para o Menu Inicial */}
+            {/* 3. Controles de Áudio e Retorno ao Menu Principal */}
             <div className="border-t border-white/10 pt-4 flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 <button
                   onClick={toggleMute}
                   title="Mudo Geral (Tecla M)"
-                  className="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 cursor-pointer"
+                  className="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 transition-colors cursor-pointer"
                 >
                   {isMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4" />}
                 </button>
                 <button
                   onClick={toggleMusic}
                   title="Alternar Música (Tecla N)"
-                  className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-zinc-300 flex items-center gap-1.5 cursor-pointer"
+                  className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-zinc-300 flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <Music className="w-3.5 h-3.5 text-amber-400" />
                   <span>{isMusicPlaying ? 'Música ON' : 'Música OFF'}</span>
@@ -3191,7 +4296,7 @@ export default function App() {
                 <button
                   onClick={cycleMusicTrack}
                   title="Trocar Faixa"
-                  className="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 cursor-pointer"
+                  className="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 transition-colors cursor-pointer"
                 >
                   <Disc className="w-4 h-4 text-amber-400" />
                 </button>
@@ -3199,15 +4304,480 @@ export default function App() {
 
               <button
                 onClick={() => gameRef.current.returnToMenu()}
-                className="px-3.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-rose-400 font-semibold text-xs flex items-center gap-1.5 cursor-pointer"
+                className="px-3.5 py-2 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-400/25 text-rose-300 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
               >
                 <ArrowLeft className="w-3.5 h-3.5" />
-                <span>Menu Inicial</span>
+                <span>Menu Principal</span>
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* ========================================================================
+          TELA DE RESULTADOS FINAL (APÓS OS 7 ROUNDS COMPLETOS) — DASHBOARD ÚNICO
+          ======================================================================== */}
+      {gameMode === 'results' && matchResults && (() => {
+        const ctPlayers = matchResults.combatants
+          .filter((c) => c.team === 'CT')
+          .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+        const trPlayers = matchResults.combatants
+          .filter((c) => c.team === 'TR')
+          .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+
+        const sumStats = (list: CombatantMatchStats[]) =>
+          list.reduce(
+            (acc, item) => {
+              acc.kills += item.kills;
+              acc.deaths += item.deaths;
+              acc.assists += item.assists;
+              acc.totalEarned += item.totalMoneyEarned;
+              acc.finalBalance += item.finalMoney;
+              return acc;
+            },
+            { kills: 0, deaths: 0, assists: 0, totalEarned: 0, finalBalance: 0 }
+          );
+
+        const ctTeamTotals = sumStats(ctPlayers);
+        const trTeamTotals = sumStats(trPlayers);
+        const ctTeamKd =
+          ctTeamTotals.deaths > 0
+            ? (ctTeamTotals.kills / ctTeamTotals.deaths).toFixed(2)
+            : ctTeamTotals.kills.toFixed(2);
+        const trTeamKd =
+          trTeamTotals.deaths > 0
+            ? (trTeamTotals.kills / trTeamTotals.deaths).toFixed(2)
+            : trTeamTotals.kills.toFixed(2);
+
+        const playerEntry =
+          matchResults.combatants.find((c) => c.isPlayer) || matchResults.combatants[0];
+        const playerWonMatch = matchResults.winnerTeam === matchResults.playerTeam;
+
+        // Destaques da Partida
+        const topFrag = [...matchResults.combatants].sort(
+          (a, b) => b.kills - a.kills || b.damageDealt - a.damageDealt
+        )[0];
+        const topAssists = [...matchResults.combatants].sort(
+          (a, b) => b.assists - a.assists || b.damageDealt - a.damageDealt
+        )[0];
+        const bestKdPlayer = [...matchResults.combatants].sort((a, b) => {
+          const kdA = a.deaths > 0 ? a.kills / a.deaths : a.kills + 0.5;
+          const kdB = b.deaths > 0 ? b.kills / b.deaths : b.kills + 0.5;
+          return kdB - kdA || b.kills - a.kills;
+        })[0];
+        const richestPlayer = [...matchResults.combatants].sort(
+          (a, b) => b.totalMoneyEarned - a.totalMoneyEarned || b.finalMoney - a.finalMoney
+        )[0];
+
+        const formatKd = (k: number, d: number) =>
+          d > 0 ? (k / d).toFixed(2) : k.toFixed(2);
+
+        return (
+          <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 sm:p-6 overflow-y-auto">
+            <div className="max-w-6xl w-full bg-zinc-950/95 border border-white/15 rounded-3xl p-5 sm:p-7 shadow-2xl my-auto max-h-[94vh] flex flex-col overflow-hidden">
+              {/* 1. CABEÇALHO DA PARTIDA E VEREDITO */}
+              <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 border-b border-white/10 pb-4 mb-4 shrink-0">
+                <div>
+                  <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-zinc-400 mb-1">
+                    <span className="text-amber-400">Relatório Final da Partida</span>
+                    <span aria-hidden="true">·</span>
+                    <span>Mapa: {MAP_CATALOG[matchResults.mapId].name}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{matchResults.roundsPlayed} Rounds Disputados</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Trophy
+                      className={`w-7 h-7 shrink-0 ${
+                        matchResults.winnerTeam === 'CT' ? 'text-sky-400' : 'text-rose-400'
+                      }`}
+                    />
+                    <div>
+                      <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white uppercase">
+                        {matchResults.winnerTeam === 'CT'
+                          ? 'Vitória da Polícia Militar (PM)'
+                          : 'Vitória dos Bandidos (TR)'}
+                      </h2>
+                      <p className="text-xs text-zinc-400">
+                        {playerWonMatch
+                          ? 'Seu esquadrão dominou a operação após os 7 rounds regulamentares.'
+                          : 'A equipe adversária superou seu esquadrão no placar acumulado dos 7 rounds.'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Placar Final + Linha do Tempo dos 7 Rounds */}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
+                  <div className="flex items-center justify-center gap-1.5 bg-white/[0.03] border border-white/10 rounded-xl px-3 py-2">
+                    {Array.from({ length: TOTAL_MATCH_ROUNDS }).map((_, idx) => {
+                      const rEntry = matchResults.roundHistory[idx];
+                      const rWin = rEntry?.winner;
+                      return (
+                        <div
+                          key={idx}
+                          title={
+                            rEntry
+                              ? `Round ${idx + 1}: ${rWin === 'CT' ? 'PM' : 'Bandidos'} (${rEntry.reason})`
+                              : `Round ${idx + 1}`
+                          }
+                          className={`w-7 h-7 rounded-lg flex flex-col items-center justify-center text-[10px] font-mono font-bold border ${
+                            rWin === 'CT'
+                              ? 'bg-sky-500/20 border-sky-400/40 text-sky-300'
+                              : rWin === 'TR'
+                              ? 'bg-rose-500/20 border-rose-400/40 text-rose-300'
+                              : 'bg-white/5 border-white/10 text-zinc-500'
+                          }`}
+                        >
+                          <span>R{idx + 1}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex items-center justify-center gap-4 bg-white/[0.04] border border-white/10 rounded-2xl px-5 py-2.5">
+                    <div className="text-right">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-sky-400">
+                        PM (CT)
+                      </div>
+                      <div className="text-2xl font-black font-mono text-white leading-none">
+                        {matchResults.ctScore}
+                      </div>
+                    </div>
+                    <span className="text-xs font-bold text-zinc-500">VS</span>
+                    <div className="text-left">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-rose-400">
+                        Bandidos (TR)
+                      </div>
+                      <div className="text-2xl font-black font-mono text-white leading-none">
+                        {matchResults.trScore}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* ÁREA DE CONTEÚDO DO DASHBOARD (ROLÁVEL SE NECESSÁRIO) */}
+              <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+                {/* 2. CARTÕES DE DESTAQUES DA PARTIDA */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-amber-400/15 text-amber-400 shrink-0">
+                      <Crown className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                        Mais Kills (Top Frag)
+                      </div>
+                      <div className="text-sm font-black text-white truncate">
+                        {topFrag.name}
+                      </div>
+                      <div className="text-xs font-mono text-amber-400">
+                        {topFrag.kills} abates · {topFrag.headshots} HS
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-sky-400/15 text-sky-400 shrink-0">
+                      <Award className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                        Mais Assistências
+                      </div>
+                      <div className="text-sm font-black text-white truncate">
+                        {topAssists.name}
+                      </div>
+                      <div className="text-xs font-mono text-sky-400">
+                        {topAssists.assists} assistências · {topAssists.damageDealt} dano
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-emerald-400/15 text-emerald-400 shrink-0">
+                      <Target className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                        Melhor K/D da Partida
+                      </div>
+                      <div className="text-sm font-black text-white truncate">
+                        {bestKdPlayer.name}
+                      </div>
+                      <div className="text-xs font-mono text-emerald-400">
+                        K/D {formatKd(bestKdPlayer.kills, bestKdPlayer.deaths)} ({bestKdPlayer.kills}/{bestKdPlayer.deaths})
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-amber-400/15 text-amber-400 shrink-0">
+                      <TrendingUp className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                        Maior Acumulador ($)
+                      </div>
+                      <div className="text-sm font-black text-white truncate">
+                        {richestPlayer.name}
+                      </div>
+                      <div className="text-xs font-mono text-amber-400">
+                        ${richestPlayer.totalMoneyEarned.toLocaleString('pt-BR')} acumulados
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. RESUMO COMPARATIVO DAS EQUIPES + DEMONSTRATIVO ECONÔMICO DO JOGADOR */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                  {/* Resumo Esquadrão PM (CT) */}
+                  <div className="p-4 rounded-2xl bg-sky-950/20 border border-sky-400/25 space-y-2.5">
+                    <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                      <span className="text-xs font-black uppercase tracking-wider text-sky-400">
+                        Esquadrão Polícia Militar (CT)
+                      </span>
+                      <span className="text-xs font-mono font-bold text-white">
+                        {matchResults.ctScore} Rounds Vencidos
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <div className="text-[10px] text-zinc-400">Kills / Mortes</div>
+                        <div className="font-mono font-bold text-white">
+                          {ctTeamTotals.kills} / {ctTeamTotals.deaths}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-zinc-400">Assistências</div>
+                        <div className="font-mono font-bold text-white">
+                          {ctTeamTotals.assists}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-zinc-400">K/D Geral</div>
+                        <div className="font-mono font-bold text-sky-300">{ctTeamKd}</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between pt-1 border-t border-white/5 text-xs">
+                      <span className="text-zinc-400">
+                        Total Acumulado:{' '}
+                        <strong className="font-mono text-amber-400">
+                          ${ctTeamTotals.totalEarned.toLocaleString('pt-BR')}
+                        </strong>
+                      </span>
+                      <span className="text-zinc-400">
+                        Saldo Final:{' '}
+                        <strong className="font-mono text-emerald-400">
+                          ${ctTeamTotals.finalBalance.toLocaleString('pt-BR')}
+                        </strong>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Resumo Bandidos (TR) */}
+                  <div className="p-4 rounded-2xl bg-rose-950/20 border border-rose-400/25 space-y-2.5">
+                    <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                      <span className="text-xs font-black uppercase tracking-wider text-rose-400">
+                        Facção Bandidos (TR)
+                      </span>
+                      <span className="text-xs font-mono font-bold text-white">
+                        {matchResults.trScore} Rounds Vencidos
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <div className="text-[10px] text-zinc-400">Kills / Mortes</div>
+                        <div className="font-mono font-bold text-white">
+                          {trTeamTotals.kills} / {trTeamTotals.deaths}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-zinc-400">Assistências</div>
+                        <div className="font-mono font-bold text-white">
+                          {trTeamTotals.assists}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-zinc-400">K/D Geral</div>
+                        <div className="font-mono font-bold text-rose-300">{trTeamKd}</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between pt-1 border-t border-white/5 text-xs">
+                      <span className="text-zinc-400">
+                        Total Acumulado:{' '}
+                        <strong className="font-mono text-amber-400">
+                          ${trTeamTotals.totalEarned.toLocaleString('pt-BR')}
+                        </strong>
+                      </span>
+                      <span className="text-zinc-400">
+                        Saldo Final:{' '}
+                        <strong className="font-mono text-emerald-400">
+                          ${trTeamTotals.finalBalance.toLocaleString('pt-BR')}
+                        </strong>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Economia Detalhada do Jogador */}
+                  <div className="p-4 rounded-2xl bg-white/[0.03] border border-amber-400/30 space-y-2">
+                    <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                      <span className="text-xs font-black uppercase tracking-wider text-amber-400">
+                        Sua Economia nos 7 Rounds
+                      </span>
+                      <span className="text-xs font-mono font-bold text-emerald-400">
+                        Saldo Final: ${playerEntry.finalMoney.toLocaleString('pt-BR')}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                      <div className="flex items-center justify-between text-zinc-400">
+                        <span>Inicial:</span>
+                        <span className="font-mono text-white">
+                          ${playerEntry.startingMoney.toLocaleString('pt-BR')}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-zinc-400">
+                        <span>Por Kills:</span>
+                        <span className="font-mono text-amber-300">
+                          +${playerEntry.killRewardsEarned.toLocaleString('pt-BR')}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-zinc-400">
+                        <span>Por Rounds:</span>
+                        <span className="font-mono text-sky-300">
+                          +${playerEntry.roundRewardsEarned.toLocaleString('pt-BR')}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-zinc-300 font-semibold">
+                        <span>Total Ganho:</span>
+                        <span className="font-mono text-amber-400">
+                          ${playerEntry.totalMoneyEarned.toLocaleString('pt-BR')}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. TABELA DE ESTATÍSTICAS INDIVIDUAIS (JOGADOR + TODOS OS BOTS CT E TR) */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {[
+                    {
+                      team: 'CT' as TeamSide,
+                      title: 'Classificação Individual · Polícia Militar (CT)',
+                      accent: 'text-sky-400',
+                      players: ctPlayers,
+                    },
+                    {
+                      team: 'TR' as TeamSide,
+                      title: 'Classificação Individual · Bandidos (TR)',
+                      accent: 'text-rose-400',
+                      players: trPlayers,
+                    },
+                  ].map((group) => (
+                    <div
+                      key={group.team}
+                      className="rounded-2xl bg-white/[0.02] border border-white/10 overflow-hidden"
+                    >
+                      <div className="px-4 py-2.5 bg-white/[0.03] border-b border-white/10 flex items-center justify-between">
+                        <span className={`text-xs font-bold uppercase tracking-wider ${group.accent}`}>
+                          {group.title}
+                        </span>
+                        <span className="text-[11px] text-zinc-400">5 Combatentes</span>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="border-b border-white/10 text-[10px] uppercase tracking-wider text-zinc-400">
+                              <th className="py-2 pl-4 pr-2">Combatente</th>
+                              <th className="py-2 px-2 text-center">K</th>
+                              <th className="py-2 px-2 text-center">D</th>
+                              <th className="py-2 px-2 text-center">A</th>
+                              <th className="py-2 px-2 text-center">K/D</th>
+                              <th className="py-2 px-2 text-right">Total Ganho</th>
+                              <th className="py-2 pl-2 pr-4 text-right">Saldo Final</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-white/5 font-mono">
+                            {group.players.map((c) => (
+                              <tr
+                                key={c.key}
+                                className={
+                                  c.isPlayer
+                                    ? 'bg-amber-400/15 text-white font-bold'
+                                    : 'text-zinc-300 hover:bg-white/[0.03]'
+                                }
+                              >
+                                <td className="py-2.5 pl-4 pr-2 font-sans">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="truncate max-w-[135px]">
+                                      {c.name}
+                                    </span>
+                                    {c.isPlayer && (
+                                      <span className="text-[10px] font-black uppercase text-amber-400">
+                                        [VOCÊ]
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[10px] text-zinc-400 font-normal">
+                                    {c.weaponLabel}
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-2 text-center text-white font-bold">
+                                  {c.kills}
+                                </td>
+                                <td className="py-2.5 px-2 text-center text-zinc-400">
+                                  {c.deaths}
+                                </td>
+                                <td className="py-2.5 px-2 text-center text-zinc-300">
+                                  {c.assists}
+                                </td>
+                                <td className="py-2.5 px-2 text-center text-sky-300">
+                                  {formatKd(c.kills, c.deaths)}
+                                </td>
+                                <td className="py-2.5 px-2 text-right text-amber-300">
+                                  ${c.totalMoneyEarned.toLocaleString('pt-BR')}
+                                </td>
+                                <td className="py-2.5 pl-2 pr-4 text-right text-emerald-400 font-bold">
+                                  ${c.finalMoney.toLocaleString('pt-BR')}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 5. RODAPÉ COM BOTÃO DE RETORNO AO MENU PRINCIPAL E NOVA PARTIDA */}
+              <div className="border-t border-white/10 pt-4 mt-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 shrink-0">
+                <div className="text-xs text-zinc-400">
+                  Retorne ao Menu Principal para escolher outro mapa ou iniciar uma nova operação tática de 7 rounds.
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => gameRef.current.restartMatch()}
+                    className="px-4 py-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-zinc-200 font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <RotateCcw className="w-4 h-4 text-amber-400" />
+                    <span>Jogar Novamente</span>
+                  </button>
+
+                  <button
+                    onClick={() => gameRef.current.returnToMenu()}
+                    className="px-6 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    <span>Voltar ao Menu Principal</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ========================================================================
           LOJA DE ARMAS CATEGORIZADA (TECLA B) — ARSENAL BRASILEIRO (16 ARMAS)

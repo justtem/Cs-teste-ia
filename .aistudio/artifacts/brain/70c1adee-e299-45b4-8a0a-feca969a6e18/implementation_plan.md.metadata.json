@@ -1,6 +1,6 @@
 {
-  "summary":  "Plano de Implementação da Fase 4 — Reformulação Visual 3D Low-Poly Estilizada e Expansão Tática do Mapa 4: Complexo (Conjunto Habitacional & Passarelas — 110m × 110m), com Bombsite A na Quadra Poliesportiva Central + Passarela Aérea com Mirante Coberto (+2.6m) e Bombsite B no Pátio das Garagens Coletivas em Pilotis.",
-  "updatedAt":  "2026-10-31T09:41:48.688392343Z",
+  "summary":  "Plano de implementação para otimização do Blackboard tático: compartilhamento estrito de percepções dos últimos 3 segundos, pruning periódico a cada 0.2s e purga imediata de combatentes eliminados.",
+  "updatedAt":  "2026-11-01T02:59:07.747523678Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
