@@ -38,16 +38,18 @@ export interface WeaponSpec {
   isMelee?: boolean;
   maxRange?: number;
   pellets?: number;
+  glbModel?: string;
+  accessories?: string[];
 }
 
 export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
   knife: {
     id: 'knife',
-    name: 'Faca Tática Combat Knife',
-    shortName: 'Faca Tática',
+    name: 'Faca Tática Combat Knife (Baioneta M9)',
+    shortName: 'Faca / Baioneta',
     category: 'Corpo a Corpo (Inicial)',
     factionTag: 'AMBOS',
-    description: 'Lâmina tática de aço temperado com sulco central e estocada letal.',
+    description: 'Lâmina tática militar M9 em aço temperado com sulco central e estocada letal.',
     price: 0,
     damage: 45,
     secondaryDamage: 88,
@@ -65,6 +67,7 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     lengthScale: 0.65,
     isMelee: true,
     maxRange: 3.4,
+    glbModel: 'Bayonet.glb',
   },
   // ==========================================================================
   // PISTOLAS (6 MODELOS: USP, GLOCK 17, GLOCK 19, TAURUS PT92, TAURUS TH9, DEAGLE)
@@ -91,6 +94,7 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0x2b3036,
     accentColor: 0x18181b,
     lengthScale: 0.72,
+    glbModel: 'Pistol-52kQzphmeF.glb',
   },
   glock17: {
     id: 'glock17',
@@ -114,6 +118,7 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0x1f2328,
     accentColor: 0x121316,
     lengthScale: 0.74,
+    glbModel: 'Pistol.glb',
   },
   glock19: {
     id: 'glock19',
@@ -137,6 +142,7 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0x333942,
     accentColor: 0x141518,
     lengthScale: 0.68,
+    glbModel: 'Pistol-J3i9KDQ3kt.glb',
   },
   pt92: {
     id: 'pt92',
@@ -160,6 +166,7 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0xcbd5e1,
     accentColor: 0x18181b,
     lengthScale: 0.78,
+    glbModel: 'Pistol-J3i9KDQ3kt.glb',
   },
   th9: {
     id: 'th9',
@@ -183,6 +190,7 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0x262b33,
     accentColor: 0x111317,
     lengthScale: 0.75,
+    glbModel: 'Pistol-52kQzphmeF.glb',
   },
   deagle: {
     id: 'deagle',
@@ -206,6 +214,79 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0xe2e8f0,
     accentColor: 0x18181b,
     lengthScale: 0.85,
+    glbModel: 'Pistol-Z7aOjJu583.glb',
+  },
+  revolver_38: {
+    id: 'revolver_38',
+    name: 'Taurus RT 889 (.38 Special)',
+    shortName: 'Taurus .38',
+    category: 'Revólver Clássico (.38 SPL)',
+    shopTab: 'pistols',
+    factionTag: 'AMBOS',
+    description: 'Revólver de tambor de 6 tiros com empunhadura em madeira e alta precisão inicial.',
+    price: 600,
+    damage: 44,
+    headshotMult: 2.75,
+    fireRateMs: 260,
+    clipSize: 6,
+    reserveMax: 36,
+    reloadTimeMs: 1850,
+    recoilKick: 0.082,
+    spread: 0.0065,
+    auto: false,
+    killReward: 350,
+    bodyColor: 0x3f3f46,
+    accentColor: 0x7c3f1c,
+    lengthScale: 0.76,
+    glbModel: 'Revolver.glb',
+  },
+  revolver_357: {
+    id: 'revolver_357',
+    name: 'Colt Python (.357 Magnum)',
+    shortName: 'Python .357',
+    category: 'Revólver Pesado (.357 Mag)',
+    shopTab: 'pistols',
+    factionTag: 'PM',
+    description: 'Cano ventilado reforçado em aço inoxidável com alto impacto balístico a média distância.',
+    price: 750,
+    damage: 58,
+    headshotMult: 2.85,
+    fireRateMs: 340,
+    clipSize: 6,
+    reserveMax: 36,
+    reloadTimeMs: 1950,
+    recoilKick: 0.115,
+    spread: 0.0055,
+    auto: false,
+    killReward: 350,
+    bodyColor: 0xcbd5e1,
+    accentColor: 0x5c3a21,
+    lengthScale: 0.82,
+    glbModel: 'Revolver-9C26wSpMS0.glb',
+  },
+  revolver_44: {
+    id: 'revolver_44',
+    name: 'Taurus Raging Bull (.44 Magnum)',
+    shortName: 'Raging Bull .44',
+    category: 'Revólver Caçador (.44 Mag)',
+    shopTab: 'pistols',
+    factionTag: 'BANDIDOS',
+    description: 'Canhão de mão brasileiro de cano longo com compensador de recuo e letalidade extrema.',
+    price: 850,
+    damage: 66,
+    headshotMult: 2.95,
+    fireRateMs: 410,
+    clipSize: 6,
+    reserveMax: 30,
+    reloadTimeMs: 2100,
+    recoilKick: 0.135,
+    spread: 0.005,
+    auto: false,
+    killReward: 400,
+    bodyColor: 0x27272a,
+    accentColor: 0xb91c1c,
+    lengthScale: 0.88,
+    glbModel: 'Revolver-XrnLUz6kQj.glb',
   },
   // ==========================================================================
   // ESCOPETAS (3 MODELOS: CANO CURTO 12G, LEONE M3, CBC PUMP MILITARY)
@@ -233,6 +314,32 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0x333840,
     accentColor: 0x6b3818,
     lengthScale: 0.86,
+    glbModel: 'Shotgun Sawed Off.glb',
+  },
+  shotgun_short: {
+    id: 'shotgun_short',
+    name: 'Mossberg 590 Cruiser Breacher 12G',
+    shortName: 'Cruiser 12G',
+    category: 'Escopeta Tática Curta (8 Balins)',
+    shopTab: 'shotguns',
+    factionTag: 'AMBOS',
+    description: 'Escopeta pump-action de coronha reduzida para invasão rápida de recintos fechados.',
+    price: 1600,
+    damage: 23,
+    headshotMult: 2.15,
+    pellets: 8,
+    fireRateMs: 800,
+    clipSize: 6,
+    reserveMax: 30,
+    reloadTimeMs: 2100,
+    recoilKick: 0.15,
+    spread: 0.074,
+    auto: false,
+    killReward: 900,
+    bodyColor: 0x262930,
+    accentColor: 0x5c3a21,
+    lengthScale: 0.96,
+    glbModel: 'Shotgun Short Stock.glb',
   },
   m3: {
     id: 'm3',
@@ -257,6 +364,7 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0x27272a,
     accentColor: 0x5c3a21,
     lengthScale: 1.12,
+    glbModel: 'Shotgun.glb',
   },
   cbc_pump: {
     id: 'cbc_pump',
@@ -281,9 +389,10 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0x181b20,
     accentColor: 0x0f1115,
     lengthScale: 1.14,
+    glbModel: 'Shotgun-ZmPTnh7njL.glb',
   },
   // ==========================================================================
-  // FUZIS DE ASSALTO E BATALHA (5 MODELOS: AK-47, HK G3, PARAFAL, IMBEL IA2, M4A1)
+  // FUZIS DE ASSALTO E BATALHA (6 MODELOS: AK-47, HK G3, PARAFAL, IMBEL IA2, M4A1, BULLPUP AUG)
   // ==========================================================================
   ak47: {
     id: 'ak47',
@@ -307,6 +416,7 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0x2c3035,
     accentColor: 0x8b4519,
     lengthScale: 1.15,
+    glbModel: 'Assault Rifle.glb',
   },
   g3: {
     id: 'g3',
@@ -315,7 +425,7 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     category: 'Fuzil de Batalha (7.62x51mm)',
     shopTab: 'rifles',
     factionTag: 'BANDIDOS',
-    description: 'Fuzil pesado com guarda-mão e coronha verde-oliva, mira em tambor e tiro potente.',
+    description: 'Fuzil pesado com guarda-mão verde-oliva, bipé tático acoplado e tiro potente.',
     price: 2800,
     damage: 43,
     headshotMult: 2.8,
@@ -330,6 +440,8 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0x25282c,
     accentColor: 0x2f3e2e,
     lengthScale: 1.24,
+    glbModel: 'Assault Rifle-fpLucho45C.glb',
+    accessories: ['Bipod.glb'],
   },
   parafal: {
     id: 'parafal',
@@ -338,7 +450,7 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     category: 'Fuzil Pesado Brasileiro (7.62mm)',
     shopTab: 'rifles',
     factionTag: 'PM',
-    description: 'Ícone das forças brasileiras: cano longo, coronha rebatível esqueleto e calibre 7.62.',
+    description: 'Ícone das forças brasileiras: cano longo, guarda-mão ventilado e calibre pesado 7.62x51mm.',
     price: 2900,
     damage: 44,
     headshotMult: 2.8,
@@ -353,6 +465,7 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0x1b1e23,
     accentColor: 0x111317,
     lengthScale: 1.25,
+    glbModel: 'Assault Rifle-fpLucho45C.glb',
   },
   ia2: {
     id: 'ia2',
@@ -361,7 +474,7 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     category: 'Fuzil Policial Nacional (5.56mm)',
     shopTab: 'rifles',
     factionTag: 'PM',
-    description: 'Fuzil brasileiro moderno com trilho Picatinny, guarda-mão ventilado e mira óptica.',
+    description: 'Fuzil brasileiro moderno com trilho Picatinny, guarda-mão ventilado e mira óptica 3D.',
     price: 3000,
     damage: 34,
     headshotMult: 2.6,
@@ -376,6 +489,8 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0x22272e,
     accentColor: 0x29382b,
     lengthScale: 1.12,
+    glbModel: 'Assault Rifle-Bgvuu4CUMV.glb',
+    accessories: ['Scope.glb'],
   },
   m4a1: {
     id: 'm4a1',
@@ -399,9 +514,36 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0x23292e,
     accentColor: 0x49535c,
     lengthScale: 1.12,
+    glbModel: 'Assault Rifle-Bgvuu4CUMV.glb',
+  },
+  bullpup_aug: {
+    id: 'bullpup_aug',
+    name: 'Steyr AUG A3 / Tavor Bullpup (5.56mm)',
+    shortName: 'AUG Bullpup',
+    category: 'Fuzil Bullpup com Luneta (5.56mm)',
+    shopTab: 'rifles',
+    factionTag: 'AMBOS',
+    description: 'Design bullpup compacto com carregador traseiro e luneta tática de Zoom (Clique Direito).',
+    price: 3300,
+    damage: 35,
+    headshotMult: 2.65,
+    fireRateMs: 96,
+    clipSize: 30,
+    reserveMax: 90,
+    reloadTimeMs: 1950,
+    recoilKick: 0.046,
+    spread: 0.0075,
+    auto: true,
+    killReward: 300,
+    bodyColor: 0x2f3e2e,
+    accentColor: 0x18181b,
+    lengthScale: 1.04,
+    hasScope: true,
+    glbModel: 'Bullpup.glb',
+    accessories: ['Scope.glb'],
   },
   // ==========================================================================
-  // TÁTICOS: SUBMETRALHADORA & SNIPER (MP5 NAVY, AWP MAGNUM)
+  // TÁTICOS: SUBMETRALHADORAS & SNIPERS (6 MODELOS)
   // ==========================================================================
   mp5: {
     id: 'mp5',
@@ -425,6 +567,84 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     bodyColor: 0x1f2428,
     accentColor: 0x3d444d,
     lengthScale: 0.95,
+    glbModel: 'Submachine Gun.glb',
+  },
+  smg_tactical: {
+    id: 'smg_tactical',
+    name: 'HK UMP-45 / P90 Tactical Optics',
+    shortName: 'UMP-45 Tactical',
+    category: 'Submetralhadora Pesada (.45 ACP)',
+    shopTab: 'tactical',
+    factionTag: 'AMBOS',
+    description: 'Submetralhadora tática de calibre .45 ACP equipada com mira óptica 3D e alto poder de parada.',
+    price: 1700,
+    damage: 30,
+    headshotMult: 2.35,
+    fireRateMs: 102,
+    clipSize: 30,
+    reserveMax: 120,
+    reloadTimeMs: 1800,
+    recoilKick: 0.045,
+    spread: 0.013,
+    auto: true,
+    killReward: 600,
+    bodyColor: 0x27272a,
+    accentColor: 0x18181b,
+    lengthScale: 0.96,
+    glbModel: 'Submachine Gun-nsP3JukU73.glb',
+    accessories: ['Scope.glb'],
+  },
+  sniper_scout: {
+    id: 'sniper_scout',
+    name: 'Steyr Scout Tactical (.308 Win)',
+    shortName: 'Scout .308',
+    category: 'Rifle de Precisão Leve (.308)',
+    shopTab: 'tactical',
+    factionTag: 'AMBOS',
+    description: 'Sniper leve de ferrolho rápido com luneta 2x/4x e bipé tático para mobilidade elevada.',
+    price: 2750,
+    damage: 78,
+    headshotMult: 3.2,
+    fireRateMs: 740,
+    clipSize: 10,
+    reserveMax: 40,
+    reloadTimeMs: 2050,
+    recoilKick: 0.11,
+    spread: 0.0015,
+    auto: false,
+    killReward: 300,
+    bodyColor: 0x334155,
+    accentColor: 0x1e293b,
+    lengthScale: 1.24,
+    hasScope: true,
+    glbModel: 'Sniper Rifle-TKaBjAEofL.glb',
+    accessories: ['Bipod.glb'],
+  },
+  sniper_dmr: {
+    id: 'sniper_dmr',
+    name: 'HK PSG-1 / MSG90 Semiauto (7.62mm)',
+    shortName: 'PSG-1 DMR',
+    category: 'Sniper Semiautomático (7.62mm)',
+    shopTab: 'tactical',
+    factionTag: 'PM',
+    description: 'Rifle sniper semiautomático de tiro contínuo com luneta 2x/4x e bipé de precisão.',
+    price: 4200,
+    damage: 68,
+    headshotMult: 2.9,
+    fireRateMs: 280,
+    clipSize: 20,
+    reserveMax: 60,
+    reloadTimeMs: 2250,
+    recoilKick: 0.095,
+    spread: 0.002,
+    auto: false,
+    killReward: 200,
+    bodyColor: 0x1e293b,
+    accentColor: 0x0f172a,
+    lengthScale: 1.32,
+    hasScope: true,
+    glbModel: 'Sniper Rifle-ASOMZIErq3.glb',
+    accessories: ['Bipod.glb'],
   },
   awp: {
     id: 'awp',
@@ -433,7 +653,7 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     category: 'Rifle de Precisão (.338)',
     shopTab: 'tactical',
     factionTag: 'AMBOS',
-    description: 'Rifle de ferrolho com luneta de Zoom 2x/4x capaz de eliminar com um disparo.',
+    description: 'Rifle de ferrolho com luneta de Zoom 2x/4x e bipé acoplado capaz de eliminar com um disparo.',
     price: 4750,
     damage: 115,
     headshotMult: 3.0,
@@ -449,6 +669,34 @@ export const WEAPON_CATALOG: Record<string, WeaponSpec> = {
     accentColor: 0x181c1a,
     lengthScale: 1.38,
     hasScope: true,
+    glbModel: 'Sniper Rifle.glb',
+    accessories: ['Bipod.glb'],
+  },
+  sniper_barrett: {
+    id: 'sniper_barrett',
+    name: 'Barrett M82A1 Antimaterial (.50 BMG)',
+    shortName: 'Barrett .50 BMG',
+    category: 'Sniper Antimaterial (.50 BMG)',
+    shopTab: 'tactical',
+    factionTag: 'BANDIDOS',
+    description: 'Rifle pesado calibre .50 BMG montado com tripé balístico e luneta de longo alcance.',
+    price: 5500,
+    damage: 145,
+    headshotMult: 3.5,
+    fireRateMs: 1120,
+    clipSize: 10,
+    reserveMax: 30,
+    reloadTimeMs: 2650,
+    recoilKick: 0.21,
+    spread: 0.0008,
+    auto: false,
+    killReward: 100,
+    bodyColor: 0x18181b,
+    accentColor: 0x27272a,
+    lengthScale: 1.46,
+    hasScope: true,
+    glbModel: 'Sniper Rifle-i65hEldsw6.glb',
+    accessories: ['Tripod.glb'],
   },
 };
 
@@ -858,25 +1106,38 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
 
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+    import { GLTFLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
+
+    const gltfLoader = new GLTFLoader();
+    const glbCache = new Map();
 
     const WEAPONS = {
-      knife:     { name: 'Faca Tática',  price: 0,    damage: 45, clip: 1,  reserve: 1,   rate: 0.35, recoil: 0.08, isMelee: true },
-      usp:       { name: 'USP .45',      price: 300,  damage: 28, clip: 12, reserve: 48,  rate: 0.18, recoil: 0.05 },
-      glock17:   { name: 'Glock 17',     price: 400,  damage: 26, clip: 17, reserve: 68,  rate: 0.15, recoil: 0.04 },
-      glock19:   { name: 'Glock 19',     price: 500,  damage: 27, clip: 15, reserve: 60,  rate: 0.14, recoil: 0.04 },
-      pt92:      { name: 'Taurus PT92',  price: 550,  damage: 31, clip: 15, reserve: 60,  rate: 0.17, recoil: 0.05 },
-      th9:       { name: 'Taurus TH9',   price: 600,  damage: 32, clip: 17, reserve: 68,  rate: 0.16, recoil: 0.05 },
-      deagle:    { name: 'Desert Eagle', price: 650,  damage: 54, clip: 7,  reserve: 35,  rate: 0.30, recoil: 0.10 },
-      sawed_off: { name: 'Doze Curta',   price: 1400, damage: 24, clip: 5,  reserve: 25,  rate: 0.76, recoil: 0.16, pellets: 9, spread: 0.086 },
-      m3:        { name: 'Shotgun M3',   price: 1700, damage: 22, clip: 8,  reserve: 32,  rate: 0.88, recoil: 0.14, pellets: 8, spread: 0.068 },
-      cbc_pump:  { name: 'CBC Pump 12G', price: 1850, damage: 21, clip: 8,  reserve: 32,  rate: 0.81, recoil: 0.13, pellets: 9, spread: 0.058 },
-      mp5:       { name: 'MP5 Navy',     price: 1500, damage: 26, clip: 30, reserve: 120, rate: 0.09, recoil: 0.04 },
-      ak47:      { name: 'AK-47',        price: 2500, damage: 36, clip: 30, reserve: 90,  rate: 0.10, recoil: 0.07 },
-      g3:        { name: 'HK G3 7.62',   price: 2800, damage: 43, clip: 20, reserve: 80,  rate: 0.13, recoil: 0.08 },
-      parafal:   { name: 'ParaFAL 7.62', price: 2900, damage: 44, clip: 20, reserve: 80,  rate: 0.12, recoil: 0.08 },
-      ia2:       { name: 'IMBEL IA2',    price: 3000, damage: 34, clip: 30, reserve: 90,  rate: 0.09, recoil: 0.05 },
-      m4a1:      { name: 'M4A1 Carbine', price: 3100, damage: 33, clip: 30, reserve: 90,  rate: 0.09, recoil: 0.05 },
-      awp:       { name: 'AWP Sniper',   price: 4750, damage: 115, clip: 10, reserve: 30, rate: 0.95, recoil: 0.16, hasScope: true }
+      knife:          { name: 'Faca / Baioneta', price: 0,    damage: 45,  clip: 1,  reserve: 1,   rate: 0.35, recoil: 0.08, isMelee: true, glb: 'Bayonet.glb', len: 0.35 },
+      usp:            { name: 'USP .45',         price: 300,  damage: 28,  clip: 12, reserve: 48,  rate: 0.18, recoil: 0.05, glb: 'Pistol-52kQzphmeF.glb', len: 0.285 },
+      glock17:        { name: 'Glock 17',        price: 400,  damage: 26,  clip: 17, reserve: 68,  rate: 0.15, recoil: 0.04, glb: 'Pistol.glb', len: 0.255 },
+      glock19:        { name: 'Glock 19',        price: 500,  damage: 27,  clip: 15, reserve: 60,  rate: 0.14, recoil: 0.04, glb: 'Pistol-J3i9KDQ3kt.glb', len: 0.24 },
+      pt92:           { name: 'Taurus PT92',     price: 550,  damage: 31,  clip: 15, reserve: 60,  rate: 0.17, recoil: 0.05, glb: 'Pistol-J3i9KDQ3kt.glb', len: 0.27 },
+      th9:            { name: 'Taurus TH9',      price: 600,  damage: 32,  clip: 17, reserve: 68,  rate: 0.16, recoil: 0.05, glb: 'Pistol-52kQzphmeF.glb', len: 0.28 },
+      deagle:         { name: 'Desert Eagle',    price: 650,  damage: 54,  clip: 7,  reserve: 35,  rate: 0.30, recoil: 0.10, glb: 'Pistol-Z7aOjJu583.glb', len: 0.305 },
+      revolver_38:    { name: 'Taurus .38',      price: 600,  damage: 44,  clip: 6,  reserve: 36,  rate: 0.26, recoil: 0.08, glb: 'Revolver.glb', len: 0.285 },
+      revolver_357:   { name: 'Python .357',     price: 750,  damage: 58,  clip: 6,  reserve: 36,  rate: 0.34, recoil: 0.11, glb: 'Revolver-9C26wSpMS0.glb', len: 0.315 },
+      revolver_44:    { name: 'Raging Bull .44', price: 850,  damage: 66,  clip: 6,  reserve: 30,  rate: 0.41, recoil: 0.13, glb: 'Revolver-XrnLUz6kQj.glb', len: 0.335 },
+      sawed_off:      { name: 'Doze Curta',      price: 1400, damage: 24,  clip: 5,  reserve: 25,  rate: 0.76, recoil: 0.16, pellets: 9, spread: 0.086, glb: 'Shotgun Sawed Off.glb', len: 0.56 },
+      shotgun_short:  { name: 'Cruiser 12G',     price: 1600, damage: 23,  clip: 6,  reserve: 30,  rate: 0.80, recoil: 0.15, pellets: 8, spread: 0.074, glb: 'Shotgun Short Stock.glb', len: 0.65 },
+      m3:             { name: 'Shotgun M3',      price: 1700, damage: 22,  clip: 8,  reserve: 32,  rate: 0.88, recoil: 0.14, pellets: 8, spread: 0.068, glb: 'Shotgun.glb', len: 0.76 },
+      cbc_pump:       { name: 'CBC Pump 12G',    price: 1850, damage: 21,  clip: 8,  reserve: 32,  rate: 0.81, recoil: 0.13, pellets: 9, spread: 0.058, glb: 'Shotgun-ZmPTnh7njL.glb', len: 0.77 },
+      mp5:            { name: 'MP5 Navy',        price: 1500, damage: 26,  clip: 30, reserve: 120, rate: 0.09, recoil: 0.04, glb: 'Submachine Gun.glb', len: 0.52 },
+      smg_tactical:   { name: 'UMP-45 Tactical', price: 1700, damage: 30,  clip: 30, reserve: 120, rate: 0.10, recoil: 0.045, glb: 'Submachine Gun-nsP3JukU73.glb', len: 0.54 },
+      ak47:           { name: 'AK-47',           price: 2500, damage: 36,  clip: 30, reserve: 90,  rate: 0.10, recoil: 0.07, glb: 'Assault Rifle.glb', len: 0.72 },
+      g3:             { name: 'HK G3 7.62',      price: 2800, damage: 43,  clip: 20, reserve: 80,  rate: 0.13, recoil: 0.08, glb: 'Assault Rifle-fpLucho45C.glb', len: 0.76 },
+      parafal:        { name: 'ParaFAL 7.62',    price: 2900, damage: 44,  clip: 20, reserve: 80,  rate: 0.12, recoil: 0.08, glb: 'Assault Rifle-fpLucho45C.glb', len: 0.76 },
+      ia2:            { name: 'IMBEL IA2',       price: 3000, damage: 34,  clip: 30, reserve: 90,  rate: 0.09, recoil: 0.05, glb: 'Assault Rifle-Bgvuu4CUMV.glb', len: 0.70 },
+      m4a1:           { name: 'M4A1 Carbine',    price: 3100, damage: 33,  clip: 30, reserve: 90,  rate: 0.09, recoil: 0.05, glb: 'Assault Rifle-Bgvuu4CUMV.glb', len: 0.70 },
+      bullpup_aug:    { name: 'AUG Bullpup',     price: 3300, damage: 35,  clip: 30, reserve: 90,  rate: 0.096, recoil: 0.046, hasScope: true, glb: 'Bullpup.glb', len: 0.66 },
+      sniper_scout:   { name: 'Scout .308',      price: 2750, damage: 78,  clip: 10, reserve: 40,  rate: 0.74, recoil: 0.11, hasScope: true, glb: 'Sniper Rifle-TKaBjAEofL.glb', len: 0.82 },
+      sniper_dmr:     { name: 'PSG-1 DMR',       price: 4200, damage: 68,  clip: 20, reserve: 60,  rate: 0.28, recoil: 0.095, hasScope: true, glb: 'Sniper Rifle-ASOMZIErq3.glb', len: 0.85 },
+      awp:            { name: 'AWP Sniper',      price: 4750, damage: 115, clip: 10, reserve: 30,  rate: 0.95, recoil: 0.16, hasScope: true, glb: 'Sniper Rifle.glb', len: 0.86 },
+      sniper_barrett: { name: 'Barrett .50 BMG', price: 5500, damage: 145, clip: 10, reserve: 30,  rate: 1.12, recoil: 0.21, hasScope: true, glb: 'Sniper Rifle-i65hEldsw6.glb', len: 0.90 }
     };
 
     let scene, camera, renderer, clock, weaponGroup, audioCtx = null;
@@ -949,51 +1210,76 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
       colliders.push({ minX: x - w/2, maxX: x + w/2, minY: y - h/2, maxY: y + h/2, minZ: z - d/2, maxZ: z + d/2 });
     }
 
+    let vmToken = 0;
     function buildViewmodel() {
-      if (weaponGroup) camera.remove(weaponGroup);
-      weaponGroup = new THREE.Group();
-      const wKey = getActiveWeaponKey();
-      const sleeveMat = new THREE.MeshStandardMaterial({ color: player.team === 'CT' ? 0x1e3a8a : 0x7f1d1d });
-      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.42), sleeveMat);
-      arm.position.set(0.24, -0.25, -0.32);
-      weaponGroup.add(arm);
-
-      if (wKey === 'deagle' || wKey === 'usp') {
-        // Modelo 3D Autêntico de Pistola (Ferrolho Cromado Prateado na Deagle + Punho Anatômico Preto)
-        const slideMat = new THREE.MeshStandardMaterial({
-          color: wKey === 'deagle' ? 0xe2e8f0 : 0x2b3036,
-          metalness: wKey === 'deagle' ? 0.92 : 0.7,
-          roughness: wKey === 'deagle' ? 0.16 : 0.35
-        });
-        const gripMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.78 });
-        const slide = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.072, wKey === 'deagle' ? 0.32 : 0.24), slideMat);
-        slide.position.set(0.21, -0.135, -0.53);
-        const grip = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.15, 0.076), gripMat);
-        grip.position.set(0.21, -0.22, -0.43);
-        grip.rotation.x = -0.26;
-        weaponGroup.add(slide, grip);
-      } else if (wKey === 'm3') {
-        // Modelo 3D da Shotgun M3 (Cano 12G + Tubo Inferior + Telha Pump-Action)
-        const bodyMat = new THREE.MeshStandardMaterial({ color: 0x27272a, metalness: 0.75, roughness: 0.32 });
-        const woodMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.72 });
-        const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.068, 0.095, 0.36), bodyMat);
-        receiver.position.set(0.21, -0.16, -0.46);
-        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.62, 12), bodyMat);
-        barrel.rotation.x = Math.PI / 2;
-        barrel.position.set(0.21, -0.135, -0.82);
-        const tubeMag = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.56, 12), bodyMat);
-        tubeMag.rotation.x = Math.PI / 2;
-        tubeMag.position.set(0.21, -0.168, -0.79);
-        const pump = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.24, 12), woodMat);
-        pump.rotation.x = Math.PI / 2;
-        pump.position.set(0.21, -0.168, -0.74);
-        weaponGroup.add(receiver, barrel, tubeMag, pump);
-      } else {
-        const metalMat = new THREE.MeshStandardMaterial({ color: wKey === 'knife' ? 0xd1d5db : 0x262a2e, metalness: 0.75, roughness: 0.35 });
-        const body = new THREE.Mesh(new THREE.BoxGeometry(wKey === 'knife' ? 0.02 : 0.07, 0.08, wKey === 'knife' ? 0.34 : 0.48), metalMat);
-        body.position.set(0.22, -0.17, -0.58);
-        weaponGroup.add(body);
+      for (let i = camera.children.length - 1; i >= 0; i--) {
+        if (camera.children[i].userData && camera.children[i].userData.isFirstPersonViewmodel) {
+          camera.remove(camera.children[i]);
+        }
       }
+      weaponGroup = new THREE.Group();
+      weaponGroup.userData.isFirstPersonViewmodel = true;
+      const myToken = ++vmToken;
+      const wKey = getActiveWeaponKey();
+      const wDef = WEAPONS[wKey] || WEAPONS.knife;
+      const isPistol = wKey === 'usp' || wKey === 'glock17' || wKey === 'glock19' || wKey === 'pt92' || wKey === 'th9' || wKey === 'deagle' || wKey.startsWith('revolver_');
+      const sleeveMat = new THREE.MeshStandardMaterial({ color: player.team === 'CT' ? 0x131822 : 0x991b1b, roughness: 0.78 });
+      const gloveMat = new THREE.MeshStandardMaterial({ color: player.team === 'CT' ? 0x0b0d11 : 0x3f2718, roughness: 0.65 });
+
+      const rightHand = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.062, 0.058), gloveMat);
+      rightHand.position.set(0.18, -0.175, isPistol ? -0.37 : -0.40);
+      rightHand.rotation.x = -0.24;
+      const rightForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.028, 0.34, 10), sleeveMat);
+      rightForearm.position.set(0.25, -0.25, -0.21);
+      rightForearm.rotation.set(1.22, 0, 0.36);
+      weaponGroup.add(rightHand, rightForearm);
+
+      if (!wDef.isMelee) {
+        const leftHand = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.045, 0.062), gloveMat);
+        leftHand.position.set(isPistol ? 0.16 : 0.17, isPistol ? -0.18 : -0.155, isPistol ? -0.39 : -0.62);
+        const leftForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.027, 0.42, 10), sleeveMat);
+        leftForearm.position.set(0.01, -0.25, isPistol ? -0.23 : -0.35);
+        leftForearm.rotation.set(1.25, 0, -0.52);
+        weaponGroup.add(leftHand, leftForearm);
+      }
+
+      const fallbackGroup = new THREE.Group();
+      const metalMat = new THREE.MeshStandardMaterial({ color: wKey === 'knife' ? 0xd1d5db : 0x262a2e, metalness: 0.75, roughness: 0.35 });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(wKey === 'knife' ? 0.018 : 0.048, 0.056, wKey === 'knife' ? 0.28 : 0.42), metalMat);
+      body.position.set(0.18, -0.155, -0.50);
+      fallbackGroup.add(body);
+      weaponGroup.add(fallbackGroup);
+
+      if (wDef && wDef.glb) {
+        const currentGroup = weaponGroup;
+        const mountGlb = (rootScene) => {
+          if (weaponGroup !== currentGroup || vmToken !== myToken) return;
+          const clone = rootScene.clone(true);
+          const box = new THREE.Box3().setFromObject(clone);
+          const size = new THREE.Vector3();
+          const center = new THREE.Vector3();
+          box.getSize(size);
+          box.getCenter(center);
+          const s = (wDef.len || 0.68) / Math.max(0.001, size.x);
+          const holder = new THREE.Group();
+          clone.position.set(-center.x * s, -center.y * s, -center.z * s);
+          clone.scale.setScalar(s);
+          holder.add(clone);
+          holder.position.set(0.18, isPistol ? -0.14 : -0.165, isPistol ? -0.46 : -0.52);
+          holder.rotation.set(wDef.isMelee ? 0.18 : 0.012, Math.PI / 2 + 0.04, wDef.isMelee ? 0.08 : 0);
+          fallbackGroup.visible = false;
+          currentGroup.add(holder);
+        };
+        if (glbCache.has(wDef.glb)) {
+          mountGlb(glbCache.get(wDef.glb));
+        } else {
+          gltfLoader.load('/models/weapons/' + encodeURIComponent(wDef.glb), (gltf) => {
+            glbCache.set(wDef.glb, gltf.scene);
+            mountGlb(gltf.scene);
+          }, undefined, () => {});
+        }
+      }
+
       camera.add(weaponGroup);
     }
 

@@ -51,8 +51,13 @@ import {
   STANDALONE_HTML_SOURCE,
 } from './standaloneHtmlGenerator';
 import { MenuBackground } from './components/MenuBackground';
+import { WeaponShop3DPreview } from './components/WeaponShop3DPreview';
 import { createTeamCharacterModel } from './characterModels';
 import { buildFirstPersonWeaponViewmodel } from './weaponModels';
+import {
+  preloadWeaponGlbModels,
+  attachThirdPersonGlbToBotHand,
+} from './glbWeaponRegistry';
 import {
   MapId,
   MAP_CATALOG,
@@ -325,6 +330,7 @@ export default function App() {
   const [gameMode, setGameMode] = useState<'title' | 'playing' | 'paused' | 'results'>('title');
   const [menuTab, setMenuTab] = useState<'main' | 'maps' | 'team' | 'arsenal' | 'controls'>('main');
   const [shopTab, setShopTab] = useState<WeaponShopTab>('rifles');
+  const [previewWeaponId, setPreviewWeaponId] = useState<string>('ak47');
   const [bgStyle, setBgStyle] = useState<'dust2' | 'sandstorm' | 'tactical_night'>('dust2');
   const [isBuyOpen, setIsBuyOpen] = useState(false);
   const [isCodeModalOpen, setIsCodeModalOpen] = useState(false);
@@ -886,8 +892,11 @@ export default function App() {
 
     // Constrói APENAS UMA arma na mão usando o construtor 3D de alta definição (src/weaponModels.ts)
     const buildSingleWeaponViewmodel = (spec: WeaponSpec) => {
-      if (weaponGroup) {
-        camera.remove(weaponGroup);
+      for (let i = camera.children.length - 1; i >= 0; i--) {
+        const child = camera.children[i];
+        if (child === weaponGroup || child.userData?.isFirstPersonViewmodel) {
+          camera.remove(child);
+        }
       }
       const built = buildFirstPersonWeaponViewmodel(spec, player.team);
       weaponGroup = built.weaponGroup;
@@ -1019,6 +1028,17 @@ export default function App() {
             initialYaw,
             preferredSector
           );
+
+          const rawBotWId = brain.weaponProfile.weaponId;
+          const botCatalogWId =
+            rawBotWId === 'famas'
+              ? 'parafal'
+              : rawBotWId === 'galil'
+              ? 'g3'
+              : rawBotWId === 'p90'
+              ? 'smg_tactical'
+              : rawBotWId;
+          attachThirdPersonGlbToBotHand(botCatalogWId, built.botGun);
 
           const botId = bots.length + 1;
           const initialWpIdx = mapTopology
@@ -1554,8 +1574,9 @@ export default function App() {
     const handleSecondaryAction = () => {
       if (player.isDead || player.isReloading) return;
       const wId = getActiveWeaponId();
+      const spec = WEAPON_CATALOG[wId];
 
-      if (wId === 'awp') {
+      if (spec?.hasScope) {
         player.zoomLevel = (player.zoomLevel + 1) % 3;
         player.targetFov =
           player.zoomLevel === 0 ? 75 : player.zoomLevel === 1 ? 28 : 11;
@@ -1564,7 +1585,7 @@ export default function App() {
         }
         audioRef.current.playScopeZoom(player.zoomLevel);
         syncHud();
-      } else if (wId === 'knife') {
+      } else if (spec?.isMelee || wId === 'knife') {
         fireActiveWeapon(true);
       }
     };
@@ -1715,6 +1736,7 @@ export default function App() {
       sunLight.shadow.bias = -0.0005;
       scene.add(sunLight);
 
+      preloadWeaponGlbModels(player.loadout);
       loadArenaMap(player.mapId);
       initMatchStats();
       startNew5v5Round();
@@ -1940,9 +1962,17 @@ export default function App() {
         }
 
         if (weaponGroup) {
-          const reloadDip = player.isReloading
-            ? Math.sin(player.reloadTimer * Math.PI * 1.5) * -0.18 - 0.12
+          const totalReloadSec = Math.max(0.4, activeSpec.reloadTimeMs / 1000);
+          const reloadProgress = player.isReloading
+            ? THREE.MathUtils.clamp(1 - player.reloadTimer / totalReloadSec, 0, 1)
             : 0;
+          const reloadArc = player.isReloading
+            ? Math.sin(reloadProgress * Math.PI)
+            : 0;
+          const reloadMagPulse = player.isReloading
+            ? Math.sin(reloadProgress * Math.PI * 2)
+            : 0;
+
           // Animação suave de inspeção de arma em 1ª pessoa (Tecla [F] — 1.85s)
           const inspectProgress =
             player.inspectTimer > 0 ? 1 - player.inspectTimer / 1.85 : 0;
@@ -1952,26 +1982,53 @@ export default function App() {
             player.inspectTimer > 0 ? Math.sin(inspectProgress * Math.PI * 2) : 0;
 
           weaponGroup.position.x =
-            Math.cos(player.bobPhase * 0.5) * 0.014 - inspectWave * 0.09;
+            Math.cos(player.bobPhase * 0.5) * 0.011 -
+            inspectWave * 0.075 -
+            reloadArc * 0.025;
           weaponGroup.position.y =
-            Math.abs(Math.sin(player.bobPhase)) * 0.018 +
-            reloadDip +
-            player.equipAnimOffset +
-            inspectWave * 0.055;
+            Math.abs(Math.sin(player.bobPhase)) * 0.014 -
+            reloadArc * 0.065 +
+            player.equipAnimOffset * 0.75 +
+            inspectWave * 0.045;
           weaponGroup.position.z =
-            player.recoilOffset * 1.45 -
-            player.knifeSwingOffset * 0.28 +
-            inspectWave * 0.05;
+            player.recoilOffset * 1.15 -
+            player.knifeSwingOffset * 0.24 +
+            reloadArc * 0.03 +
+            inspectWave * 0.04;
           weaponGroup.rotation.x =
-            player.recoilOffset * 1.9 -
-            player.knifeSwingOffset * 0.75 +
-            (player.isReloading ? -0.35 : 0) +
-            inspectWave * 0.16;
+            player.recoilOffset * 1.45 -
+            player.knifeSwingOffset * 0.68 +
+            reloadArc * 0.18 +
+            inspectWave * 0.14;
           weaponGroup.rotation.y =
-            -player.knifeSwingOffset * 0.45 +
-            inspectWave * 0.52 +
-            inspectTiltSide * 0.24;
-          weaponGroup.rotation.z = inspectWave * 0.34 - inspectTiltSide * 0.18;
+            -player.knifeSwingOffset * 0.42 +
+            reloadArc * 0.16 +
+            inspectWave * 0.44 +
+            inspectTiltSide * 0.20;
+          weaponGroup.rotation.z =
+            reloadArc * 0.24 +
+            inspectWave * 0.28 -
+            inspectTiltSide * 0.15;
+
+          // Movimento coordenado da mão/braço esquerdo durante a recarga sem atravessar a arma
+          const leftArmRig = weaponGroup.userData.leftArmRig as THREE.Group | null;
+          if (leftArmRig) {
+            if (player.isReloading) {
+              leftArmRig.position.set(
+                0.02 * reloadArc,
+                -0.085 * reloadArc + 0.02 * reloadMagPulse,
+                0.09 * reloadArc
+              );
+              leftArmRig.rotation.set(
+                -0.22 * reloadArc,
+                0.12 * reloadArc,
+                -0.15 * reloadArc
+              );
+            } else {
+              leftArmRig.position.set(0, 0, 0);
+              leftArmRig.rotation.set(0, 0, 0);
+            }
+          }
         }
       } else {
         // MODO ESPECTADOR ALIADO (Quando o jogador morreu mas ainda há bots aliados vivos no round)
@@ -3988,9 +4045,11 @@ export default function App() {
                       <ArrowLeft className="w-5 h-5" />
                     </button>
                     <div>
-                      <h2 className="text-lg font-bold text-white">Arsenal Tático Brasileiro (17 Armas)</h2>
+                      <h2 className="text-lg font-bold text-white">
+                        Arsenal Tático · Ultimate Guns Pack ({Object.keys(WEAPON_CATALOG).length} Armas 3D GLB)
+                      </h2>
                       <p className="text-xs text-zinc-400">
-                        Armamentos da Polícia Militar (PM) e Facções Criminosas · Tecla [B] na partida
+                        Todos os 25 modelos 3D GLB integrados com acessórios modulares · Tecla [B] na partida
                       </p>
                     </div>
                   </div>
@@ -4005,7 +4064,7 @@ export default function App() {
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div>
-                          <div className="flex items-center gap-1.5 mb-0.5">
+                          <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
                             <span className="text-[11px] text-zinc-400">{spec.category}</span>
                             <span
                               className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
@@ -4018,6 +4077,11 @@ export default function App() {
                             >
                               {spec.factionTag}
                             </span>
+                            {spec.glbModel && (
+                              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-400/25">
+                                {spec.glbModel}
+                              </span>
+                            )}
                           </div>
                           <div className="text-sm font-bold text-white">{spec.name}</div>
                         </div>
@@ -4780,16 +4844,18 @@ export default function App() {
       })()}
 
       {/* ========================================================================
-          LOJA DE ARMAS CATEGORIZADA (TECLA B) — ARSENAL BRASILEIRO (16 ARMAS)
+          LOJA DE ARMAS CATEGORIZADA (TECLA B) — ULTIMATE GUNS PACK 3D GLB
           ======================================================================== */}
       {isBuyOpen && !isCodeModalOpen && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/65 backdrop-blur-sm p-4 sm:p-6">
-          <div className="max-w-3xl w-full bg-zinc-950/90 backdrop-blur-xl border border-white/15 rounded-3xl p-6 shadow-2xl max-h-[90vh] flex flex-col">
+          <div className="max-w-4xl w-full bg-zinc-950/90 backdrop-blur-xl border border-white/15 rounded-3xl p-5 sm:p-6 shadow-2xl max-h-[92vh] flex flex-col">
             {/* Cabeçalho da Loja */}
-            <div className="flex items-center justify-between border-b border-white/10 pb-3.5 mb-3.5">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3 mb-3">
               <div>
                 <div className="flex items-center gap-2">
-                  <h2 className="text-lg font-bold text-white">Arsenal Tático · Loja [B]</h2>
+                  <h2 className="text-lg font-bold text-white">
+                    Arsenal Tático · Ultimate Guns Pack [B]
+                  </h2>
                   <span
                     className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
                       hud.playerTeam === 'CT'
@@ -4801,7 +4867,7 @@ export default function App() {
                   </span>
                 </div>
                 <p className="text-xs text-zinc-400">
-                  Escolha a categoria abaixo e equipe no Slot 2 ou Slot 3 · Pressione [F] em jogo para inspecionar
+                  Passe o mouse ou clique em qualquer arma para inspecionar o modelo 3D GLB em 360° · Tecla [F] em jogo
                 </p>
               </div>
               <div className="text-right">
@@ -4810,21 +4876,49 @@ export default function App() {
               </div>
             </div>
 
+            {/* Visualizador Interativo 3D GLB em Tempo Real */}
+            <WeaponShop3DPreview
+              spec={WEAPON_CATALOG[previewWeaponId] || WEAPON_CATALOG.ak47}
+            />
+
             {/* Abas de Categoria da Loja */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3.5">
               {(
                 [
-                  { id: 'pistols', label: 'Pistolas', count: 6 },
-                  { id: 'shotguns', label: 'Escopetas', count: 3 },
-                  { id: 'rifles', label: 'Fuzis', count: 5 },
-                  { id: 'tactical', label: 'Táticos & Sniper', count: 2 },
-                ] as { id: WeaponShopTab; label: string; count: number }[]
+                  {
+                    id: 'pistols',
+                    label: 'Pistolas & Revólveres',
+                    count: Object.values(WEAPON_CATALOG).filter((w) => w.shopTab === 'pistols').length,
+                    defaultId: 'deagle',
+                  },
+                  {
+                    id: 'shotguns',
+                    label: 'Escopetas 12G',
+                    count: Object.values(WEAPON_CATALOG).filter((w) => w.shopTab === 'shotguns').length,
+                    defaultId: 'm3',
+                  },
+                  {
+                    id: 'rifles',
+                    label: 'Fuzis & Bullpup',
+                    count: Object.values(WEAPON_CATALOG).filter((w) => w.shopTab === 'rifles').length,
+                    defaultId: 'ak47',
+                  },
+                  {
+                    id: 'tactical',
+                    label: 'SMGs & Snipers',
+                    count: Object.values(WEAPON_CATALOG).filter((w) => w.shopTab === 'tactical').length,
+                    defaultId: 'awp',
+                  },
+                ] as { id: WeaponShopTab; label: string; count: number; defaultId: string }[]
               ).map((tab) => {
                 const isActive = shopTab === tab.id;
                 return (
                   <button
                     key={tab.id}
-                    onClick={() => setShopTab(tab.id)}
+                    onClick={() => {
+                      setShopTab(tab.id);
+                      setPreviewWeaponId(tab.defaultId);
+                    }}
                     className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all flex items-center justify-between cursor-pointer ${
                       isActive
                         ? 'bg-amber-400 text-zinc-950 border-amber-400 shadow-md'
@@ -4845,20 +4939,25 @@ export default function App() {
             </div>
 
             {/* Grade de Armas da Aba Selecionada */}
-            <div className="flex-1 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-2.5 pr-1 mb-4">
+            <div className="flex-1 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-2.5 pr-1 mb-3.5">
               {Object.values(WEAPON_CATALOG)
                 .filter((spec) => !spec.isMelee && spec.shopTab === shopTab)
                 .map((spec) => {
                   const canAfford = hud.money >= spec.price;
                   const inSlot1 = hud.loadout[1] === spec.id;
                   const inSlot2 = hud.loadout[2] === spec.id;
+                  const isPreviewed = previewWeaponId === spec.id;
 
                   return (
                     <div
                       key={spec.id}
-                      className={`p-3.5 rounded-2xl border flex flex-col justify-between transition-colors ${
+                      onMouseEnter={() => setPreviewWeaponId(spec.id)}
+                      onClick={() => setPreviewWeaponId(spec.id)}
+                      className={`p-3.5 rounded-2xl border flex flex-col justify-between transition-colors cursor-pointer ${
                         inSlot1 || inSlot2
                           ? 'bg-amber-400/10 border-amber-400/50'
+                          : isPreviewed
+                          ? 'bg-white/10 border-amber-400/40'
                           : canAfford
                           ? 'bg-white/5 border-white/10 hover:border-white/20'
                           : 'bg-white/[0.02] border-white/5 opacity-55'
@@ -4867,7 +4966,7 @@ export default function App() {
                       <div>
                         <div className="flex items-start justify-between gap-2 mb-1.5">
                           <div>
-                            <div className="flex items-center gap-1.5 mb-0.5">
+                            <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
                               <span className="text-[10px] text-zinc-400 uppercase tracking-wider">
                                 {spec.category}
                               </span>
@@ -4882,6 +4981,11 @@ export default function App() {
                               >
                                 {spec.factionTag}
                               </span>
+                              {spec.accessories && spec.accessories.length > 0 && (
+                                <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-400/25">
+                                  +{spec.accessories.map((a) => a.replace('.glb', '')).join('+')}
+                                </span>
+                              )}
                             </div>
                             <div className="text-sm font-bold text-white">{spec.name}</div>
                           </div>
@@ -4933,11 +5037,11 @@ export default function App() {
                               <g>
                                 <path d="M4,17 L24,11 L24,20 L6,23 Z" />
                                 <rect x="24" y="10" width="38" height="7" rx="1" />
-                                {spec.id === 'awp' && (
+                                {spec.hasScope && (
                                   <rect x="30" y="4" width="28" height="4" rx="1" className="text-emerald-400" />
                                 )}
                                 <rect x="44" y="17" width="7" height="10" rx="1" />
-                                <rect x="62" y="11.5" width={spec.id === 'awp' ? '52' : '30'} height="3" />
+                                <rect x="62" y="11.5" width={spec.hasScope ? '52' : '30'} height="3" />
                               </g>
                             )}
                           </svg>
@@ -4965,7 +5069,11 @@ export default function App() {
 
                       <div className="flex items-center gap-1.5">
                         <button
-                          onClick={() => gameRef.current.buyItem(spec.id, 1)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPreviewWeaponId(spec.id);
+                            gameRef.current.buyItem(spec.id, 1);
+                          }}
                           className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
                             inSlot1
                               ? 'bg-amber-400 text-zinc-950 border-amber-400'
@@ -4975,7 +5083,11 @@ export default function App() {
                           {inSlot1 ? 'Equipada Slot 2' : 'Equipar Slot 2'}
                         </button>
                         <button
-                          onClick={() => gameRef.current.buyItem(spec.id, 2)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPreviewWeaponId(spec.id);
+                            gameRef.current.buyItem(spec.id, 2);
+                          }}
                           className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
                             inSlot2
                               ? 'bg-amber-400 text-zinc-950 border-amber-400'

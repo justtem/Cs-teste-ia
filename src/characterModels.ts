@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { attachThirdPersonGlbToBotHand } from './glbWeaponRegistry';
 
 export interface BuiltCharacterModel {
   group: THREE.Group;
@@ -9,6 +10,7 @@ export interface BuiltCharacterModel {
   rightLeg: THREE.Mesh;
   leftArm: THREE.Mesh;
   rightArm: THREE.Mesh;
+  botGun: THREE.Mesh;
   muzzleFlash: THREE.Mesh;
   bodyMat: THREE.MeshStandardMaterial;
   headMat: THREE.MeshStandardMaterial;
@@ -792,6 +794,9 @@ function buildPMVariantModel(variantIndex: number, isSoftwareGl: boolean): Built
     muzzleFlash
   );
 
+  const defaultPmWeaponId = v === 2 || v === 5 ? 'cbc_pump' : v === 1 || v === 4 ? 'parafal' : 'ia2';
+  attachThirdPersonGlbToBotHand(defaultPmWeaponId, botGun);
+
   return {
     group,
     headMesh,
@@ -801,6 +806,7 @@ function buildPMVariantModel(variantIndex: number, isSoftwareGl: boolean): Built
     rightLeg,
     leftArm,
     rightArm,
+    botGun,
     muzzleFlash,
     bodyMat,
     headMat,
@@ -1246,6 +1252,9 @@ function buildBandidoVariantModel(
     muzzleFlash
   );
 
+  const defaultTrWeaponId = isSawedOff3P ? 'sawed_off' : isG33P ? 'g3' : isParaFal3P ? 'parafal' : 'ak47';
+  attachThirdPersonGlbToBotHand(defaultTrWeaponId, botGun);
+
   return {
     group,
     headMesh,
@@ -1255,6 +1264,7 @@ function buildBandidoVariantModel(
     rightLeg,
     leftArm,
     rightArm,
+    botGun,
     muzzleFlash,
     bodyMat,
     headMat,

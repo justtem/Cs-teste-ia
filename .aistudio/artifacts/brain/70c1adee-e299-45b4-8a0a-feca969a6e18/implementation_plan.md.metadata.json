@@ -1,6 +1,6 @@
 {
-  "summary":  "Plano de implementação para otimização do Blackboard tático: compartilhamento estrito de percepções dos últimos 3 segundos, pruning periódico a cada 0.2s e purga imediata de combatentes eliminados.",
-  "updatedAt":  "2026-11-01T02:59:07.747523678Z",
+  "summary":  "Plano arquitetural e visual para o refinamento do sistema de armas em 1ª pessoa (Viewmodels GLB, anatomia e empunhadura individual de mãos/braços por arma, calibração de escala/enquadramento competitivo e isolamento estrito da faca/baioneta no Slot 1).",
+  "updatedAt":  "2026-11-01T15:49:38.320790453Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
