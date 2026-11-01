@@ -688,9 +688,15 @@ export function buildMapTacticalTopology(
   };
 }
 
+let _astarGScore = new Float32Array(128);
+let _astarFScore = new Float32Array(128);
+let _astarCameFrom = new Int16Array(128);
+let _astarVisited = new Uint8Array(128);
+const _astarOpenSet: number[] = [];
+
 /**
  * Busca caminho tático ponderado (A*) entre dois waypoints, penalizando zonas de alto risco
- * quando o bot deseja flanquear ou recuar.
+ * quando o bot deseja flanquear ou recuar. Reutiliza buffers tipados para zero GC.
  */
 export function findTacticalPath(
   topology: MapTacticalTopology,
@@ -709,11 +715,28 @@ export function findTacticalPath(
   if (startIdx === goalIdx) return [goalIdx];
 
   const n = topology.nodes.length;
-  const gScore = new Float32Array(n).fill(Infinity);
-  const fScore = new Float32Array(n).fill(Infinity);
-  const cameFrom = new Int16Array(n).fill(-1);
-  const visited = new Uint8Array(n);
-  const openSet: number[] = [startIdx];
+  if (_astarGScore.length < n) {
+    const cap = Math.max(n + 32, _astarGScore.length * 2);
+    _astarGScore = new Float32Array(cap);
+    _astarFScore = new Float32Array(cap);
+    _astarCameFrom = new Int16Array(cap);
+    _astarVisited = new Uint8Array(cap);
+  }
+
+  for (let i = 0; i < n; i++) {
+    _astarGScore[i] = Infinity;
+    _astarFScore[i] = Infinity;
+    _astarCameFrom[i] = -1;
+    _astarVisited[i] = 0;
+  }
+
+  const gScore = _astarGScore;
+  const fScore = _astarFScore;
+  const cameFrom = _astarCameFrom;
+  const visited = _astarVisited;
+  const openSet = _astarOpenSet;
+  openSet.length = 0;
+  openSet.push(startIdx);
 
   const goalPos = topology.nodes[goalIdx].position;
   gScore[startIdx] = 0;
@@ -1123,6 +1146,12 @@ export interface BotTacticalBrain {
   peekPhaseTimer: number;
   peekSide: 'left' | 'right';
   recentlyDamagedTimer: number;
+
+  // Cache de Percepção Escalonada (2 frames em patrulha / instantâneo em combate ou dano)
+  cachedHasLOS: boolean;
+  cachedSpottedId: string | null;
+  cachedVisibleDist: number;
+  cachedVisibleEnemyCount: number;
 }
 
 export function createBotTacticalBrain(
@@ -1166,6 +1195,10 @@ export function createBotTacticalBrain(
     peekPhaseTimer: 0,
     peekSide: slotIndex % 2 === 0 ? 'left' : 'right',
     recentlyDamagedTimer: 0,
+    cachedHasLOS: false,
+    cachedSpottedId: null,
+    cachedVisibleDist: Infinity,
+    cachedVisibleEnemyCount: 0,
   };
 }
 
@@ -1175,6 +1208,95 @@ export function createBotTacticalBrain(
 
 const _tmpVecA = new THREE.Vector3();
 const _tmpVecB = new THREE.Vector3();
+
+/**
+ * Pré-filtro ultra-rápido de oclusão 3D (Segment vs AABB Slab Test) sem alocações.
+ * Rejeita imediatamente linhas de visão bloqueadas por paredes, caixas e muros antes do Raycaster 3D.
+ */
+export function isSegmentBlockedByAABBColliders(
+  ax: number,
+  ay: number,
+  az: number,
+  bx: number,
+  by: number,
+  bz: number,
+  colliders: AABBCollider[]
+): boolean {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const dz = bz - az;
+
+  const minSegX = ax < bx ? ax : bx;
+  const maxSegX = ax > bx ? ax : bx;
+  const minSegY = ay < by ? ay : by;
+  const maxSegY = ay > by ? ay : by;
+  const minSegZ = az < bz ? az : bz;
+  const maxSegZ = az > bz ? az : bz;
+
+  const invDx = Math.abs(dx) > 1e-6 ? 1.0 / dx : 0;
+  const invDy = Math.abs(dy) > 1e-6 ? 1.0 / dy : 0;
+  const invDz = Math.abs(dz) > 1e-6 ? 1.0 / dz : 0;
+
+  for (let i = 0, len = colliders.length; i < len; i++) {
+    const c = colliders[i];
+    // Rejeição rápida por Bounding Box do segmento
+    if (
+      maxSegX < c.minX ||
+      minSegX > c.maxX ||
+      maxSegY < c.minY ||
+      minSegY > c.maxY ||
+      maxSegZ < c.minZ ||
+      minSegZ > c.maxZ
+    ) {
+      continue;
+    }
+
+    let tMin = 0.025;
+    let tMax = 0.975;
+
+    if (invDx !== 0) {
+      const t1 = (c.minX - ax) * invDx;
+      const t2 = (c.maxX - ax) * invDx;
+      const tNear = t1 < t2 ? t1 : t2;
+      const tFar = t1 > t2 ? t1 : t2;
+      if (tNear > tMin) tMin = tNear;
+      if (tFar < tMax) tMax = tFar;
+      if (tMin > tMax) continue;
+    } else if (ax < c.minX || ax > c.maxX) {
+      continue;
+    }
+
+    if (invDz !== 0) {
+      const t1 = (c.minZ - az) * invDz;
+      const t2 = (c.maxZ - az) * invDz;
+      const tNear = t1 < t2 ? t1 : t2;
+      const tFar = t1 > t2 ? t1 : t2;
+      if (tNear > tMin) tMin = tNear;
+      if (tFar < tMax) tMax = tFar;
+      if (tMin > tMax) continue;
+    } else if (az < c.minZ || az > c.maxZ) {
+      continue;
+    }
+
+    if (invDy !== 0) {
+      const t1 = (c.minY - ay) * invDy;
+      const t2 = (c.maxY - ay) * invDy;
+      const tNear = t1 < t2 ? t1 : t2;
+      const tFar = t1 > t2 ? t1 : t2;
+      if (tNear > tMin) tMin = tNear;
+      if (tFar < tMax) tMax = tFar;
+      if (tMin > tMax) continue;
+    } else if (ay < c.minY || ay > c.maxY) {
+      continue;
+    }
+
+    if (tMin <= tMax) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /**
  * Verifica se um ponto está dentro do cone de visão (FOV) do bot, ou muito próximo (percepção periférica curta).

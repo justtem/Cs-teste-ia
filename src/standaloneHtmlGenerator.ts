@@ -1283,24 +1283,63 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
       camera.add(weaponGroup);
     }
 
-    const tracers = [];
+    const tracerPool = [];
+    const activeTracers = [];
+    const tracerUnitGeo = new THREE.BoxGeometry(0.03, 0.03, 1.0);
+    const _shotRaycaster = new THREE.Raycaster();
+    const _losRaycaster = new THREE.Raycaster();
+    const _ndcVec = new THREE.Vector2();
+    const _fwdVec = new THREE.Vector3();
+    const _rightVec = new THREE.Vector3();
+    const _moveVec = new THREE.Vector3();
+    const _originVec = new THREE.Vector3();
+    const _dirVec = new THREE.Vector3();
+    const _eyeVec = new THREE.Vector3();
+    const _toGoalVec = new THREE.Vector3();
+    const _muzzleVec = new THREE.Vector3();
+    const _endVec = new THREE.Vector3();
+    const _shotTargets = [];
+    let perceptionTick = 0;
+
     const ARENA_WAYPOINTS = [
       [0, -16], [0, -8], [-15, -14], [-15, 0], [-14, 13],
       [15, -14], [15, 0], [14, 13], [-4, 4], [4, -4], [0, 11]
     ];
     const STEER_ANGLES = [0, 0.42, -0.42, 0.85, -0.85, 1.3, -1.3, 1.75, -1.75];
 
+    function initTracerPool() {
+      for (let i = 0; i < 24; i++) {
+        const mat = new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.88 });
+        const mesh = new THREE.Mesh(tracerUnitGeo, mat);
+        mesh.visible = false;
+        scene.add(mesh);
+        tracerPool.push({ mesh, mat, life: 0, maxLife: 0.085, active: false });
+      }
+    }
+
     function spawnBulletTracer(startPos, endPos, colorHex) {
+      if (tracerPool.length === 0) return;
       const dist = startPos.distanceTo(endPos);
       if (dist < 0.4) return;
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.03, 0.03, dist),
-        new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.88 })
-      );
-      mesh.position.copy(startPos).lerp(endPos, 0.5);
-      mesh.lookAt(endPos);
-      scene.add(mesh);
-      tracers.push({ mesh, life: 0.085, maxLife: 0.085 });
+      let tr = null;
+      for (let i = 0; i < tracerPool.length; i++) {
+        if (!tracerPool[i].active) { tr = tracerPool[i]; break; }
+      }
+      if (!tr) {
+        tr = activeTracers.shift();
+        if (!tr) return;
+      } else {
+        tr.active = true;
+      }
+      tr.mat.color.setHex(colorHex);
+      tr.mat.opacity = 0.88;
+      tr.mesh.scale.set(1, 1, dist);
+      tr.mesh.position.copy(startPos).lerp(endPos, 0.5);
+      tr.mesh.lookAt(endPos);
+      tr.life = 0.085;
+      tr.maxLife = 0.085;
+      tr.mesh.visible = true;
+      activeTracers.push(tr);
     }
 
     let cachedFlamengoTex = null;
@@ -1541,27 +1580,32 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
       if (now - player.lastShot < spec.rate) return;
       player.lastShot = now;
 
-      const raycaster = new THREE.Raycaster();
-      const enemyMeshes = [];
-      bots.forEach((b) => { if (b.team !== player.team) enemyMeshes.push(b.head, b.torso); });
-      const targets = [...enemyMeshes, ...shootableMeshes];
+      _shotTargets.length = 0;
+      for (let i = 0; i < bots.length; i++) {
+        if (bots[i].team !== player.team) _shotTargets.push(bots[i].head, bots[i].torso);
+      }
+      for (let i = 0; i < shootableMeshes.length; i++) {
+        _shotTargets.push(shootableMeshes[i]);
+      }
 
       const pellets = spec.pellets || 1;
       const spread = spec.spread || 0;
+      _shotRaycaster.far = spec.isMelee ? 3.5 : Infinity;
 
       for (let p = 0; p < pellets; p++) {
         const ndcX = pellets > 1 ? (Math.random() - 0.5) * spread * 1.4 : 0;
         const ndcY = pellets > 1 ? (Math.random() - 0.5) * spread * 1.4 : 0;
-        raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
-        if (spec.isMelee) raycaster.far = 3.5;
+        _ndcVec.set(ndcX, ndcY);
+        _shotRaycaster.setFromCamera(_ndcVec, camera);
 
-        const hits = raycaster.intersectObjects(targets, false);
+        const hits = _shotRaycaster.intersectObjects(_shotTargets, false);
         if (hits.length > 0 && hits[0].object.userData?.bot) {
           const bot = hits[0].object.userData.bot;
           if (bot.hp <= 0) continue;
           const isHead = hits[0].object.userData.isHead;
           bot.hp -= spec.damage * (isHead ? 2.2 : 1);
           bot.bodyMat.color.setHex(0xffffff);
+          bot.recentlyDamaged = 2.0;
           if (bot.hp <= 0) {
             scene.remove(bot.group);
             const idx = bots.indexOf(bot);
@@ -1576,7 +1620,8 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
     }
 
     function checkWallCollision(px, pz, radius) {
-      for (const c of colliders) {
+      for (let i = 0; i < colliders.length; i++) {
+        const c = colliders[i];
         const cx = Math.max(c.minX, Math.min(px, c.maxX));
         const cz = Math.max(c.minZ, Math.min(pz, c.maxZ));
         if ((px - cx) ** 2 + (pz - cz) ** 2 < radius * radius) return true;
@@ -1585,13 +1630,16 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
     }
 
     function update(dt) {
-      for (let i = tracers.length - 1; i >= 0; i--) {
-        const tr = tracers[i];
+      for (let i = activeTracers.length - 1; i >= 0; i--) {
+        const tr = activeTracers[i];
         tr.life -= dt;
-        tr.mesh.material.opacity = Math.max(0, (tr.life / tr.maxLife) * 0.88);
+        tr.mat.opacity = Math.max(0, (tr.life / tr.maxLife) * 0.88);
         if (tr.life <= 0) {
-          scene.remove(tr.mesh);
-          tracers.splice(i, 1);
+          tr.mesh.visible = false;
+          tr.active = false;
+          const lastIdx = activeTracers.length - 1;
+          if (i !== lastIdx) activeTracers[i] = activeTracers[lastIdx];
+          activeTracers.pop();
         }
       }
 
@@ -1626,18 +1674,18 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
       if (!player.isDead) {
         if (isMouseDown && !player.isFreezeActive) fireActiveWeapon();
         if (!player.isFreezeActive) {
-          const forward = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
-          const right = new THREE.Vector3(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
-          const moveDir = new THREE.Vector3();
-          if (keys['KeyW']) moveDir.add(forward);
-          if (keys['KeyS']) moveDir.sub(forward);
-          if (keys['KeyD']) moveDir.add(right);
-          if (keys['KeyA']) moveDir.sub(right);
-          if (moveDir.lengthSq() > 0) moveDir.normalize();
+          _fwdVec.set(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
+          _rightVec.set(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
+          _moveVec.set(0, 0, 0);
+          if (keys['KeyW']) _moveVec.add(_fwdVec);
+          if (keys['KeyS']) _moveVec.sub(_fwdVec);
+          if (keys['KeyD']) _moveVec.add(_rightVec);
+          if (keys['KeyA']) _moveVec.sub(_rightVec);
+          if (_moveVec.lengthSq() > 0) _moveVec.normalize();
 
           const speed = getActiveWeaponKey() === 'knife' ? 10.2 : 8.2;
-          const nx = player.pos.x + moveDir.x * speed * dt;
-          const nz = player.pos.z + moveDir.z * speed * dt;
+          const nx = player.pos.x + _moveVec.x * speed * dt;
+          const nz = player.pos.z + _moveVec.z * speed * dt;
           if (!checkWallCollision(nx, player.pos.z, player.radius)) player.pos.x = nx;
           if (!checkWallCollision(player.pos.x, nz, player.radius)) player.pos.z = nz;
         }
@@ -1660,17 +1708,18 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
         return;
       }
 
-      // IA TÁTICA 5v5: Prioriza Inimigos Visíveis (LOS), Waypoints, Strafe e Rajadas com Tracers 3D
-      const losRay = new THREE.Raycaster();
+      perceptionTick = (perceptionTick + 1) & 0x7fffffff;
+
+      // IA TÁTICA 5v5: Prioriza Inimigos Visíveis (LOS escalonado em 2 frames em patrulha e instantâneo em combate)
       const checkLOS = (botPos, targetEye) => {
-        const origin = new THREE.Vector3(botPos.x, 1.5, botPos.z);
-        const dir = targetEye.clone().sub(origin);
-        const dist = dir.length();
+        _originVec.set(botPos.x, 1.5, botPos.z);
+        _dirVec.copy(targetEye).sub(_originVec);
+        const dist = _dirVec.length();
         if (dist < 0.2) return true;
-        dir.divideScalar(dist);
-        losRay.set(origin, dir);
-        losRay.far = dist;
-        const hits = losRay.intersectObjects(shootableMeshes, false);
+        _dirVec.divideScalar(dist);
+        _losRaycaster.set(_originVec, _dirVec);
+        _losRaycaster.far = dist;
+        const hits = _losRaycaster.intersectObjects(shootableMeshes, false);
         return hits.length === 0 || hits[0].distance >= dist - 0.35;
       };
 
@@ -1678,25 +1727,32 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
         const bot = bots[i];
         if (!bot) continue;
         bot.bodyMat.color.setHex(bot.baseBodyColor);
+        if (bot.recentlyDamaged > 0) bot.recentlyDamaged = Math.max(0, bot.recentlyDamaged - dt);
 
         let visibleTarget = null, visibleDist = Infinity;
         let hiddenTarget = null, hiddenDist = Infinity;
+        const shouldScan = Boolean(bot.cachedLOS) || (bot.recentlyDamaged > 0) || (((perceptionTick + i) & 1) === 0);
 
-        bots.forEach((other) => {
+        for (let j = 0; j < bots.length; j++) {
+          const other = bots[j];
           if (other.team !== bot.team) {
             const d = bot.group.position.distanceTo(other.group.position);
-            const eye = new THREE.Vector3(other.group.position.x, 1.45, other.group.position.z);
-            if (d < 52 && checkLOS(bot.group.position, eye)) {
-              if (d < visibleDist) { visibleDist = d; visibleTarget = { isPlayer: false, ref: other, pos: other.group.position }; }
+            if ((shouldScan || d < 18) && d < 52) {
+              _eyeVec.set(other.group.position.x, 1.45, other.group.position.z);
+              if (checkLOS(bot.group.position, _eyeVec)) {
+                if (d < visibleDist) { visibleDist = d; visibleTarget = { isPlayer: false, ref: other, pos: other.group.position }; }
+              } else if (d < hiddenDist) {
+                hiddenDist = d; hiddenTarget = { isPlayer: false, ref: other, pos: other.group.position };
+              }
             } else if (d < hiddenDist) {
               hiddenDist = d; hiddenTarget = { isPlayer: false, ref: other, pos: other.group.position };
             }
           }
-        });
+        }
 
         if (!player.isDead && player.team !== bot.team) {
           const d = bot.group.position.distanceTo(player.pos);
-          if (d < 52 && checkLOS(bot.group.position, player.pos)) {
+          if ((shouldScan || d < 18) && d < 52 && checkLOS(bot.group.position, player.pos)) {
             if (d < visibleDist) { visibleDist = d; visibleTarget = { isPlayer: true, pos: player.pos }; }
           } else if (d < hiddenDist) {
             hiddenDist = d; hiddenTarget = { isPlayer: true, pos: player.pos };
@@ -1704,6 +1760,7 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
         }
 
         const hasLOS = Boolean(visibleTarget);
+        bot.cachedLOS = hasLOS;
         const activeTarget = visibleTarget || hiddenTarget;
 
         bot.waypointTimer -= dt;
@@ -1722,14 +1779,14 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
           bot.strafeTimer = 0.8 + Math.random();
         }
 
-        const toT = new THREE.Vector3(goalPos.x - bot.group.position.x, 0, goalPos.z - bot.group.position.z);
-        const distToGoal = toT.length();
-        if (distToGoal > 0.001) toT.divideScalar(distToGoal);
+        _toGoalVec.set(goalPos.x - bot.group.position.x, 0, goalPos.z - bot.group.position.z);
+        const distToGoal = _toGoalVec.length();
+        if (distToGoal > 0.001) _toGoalVec.divideScalar(distToGoal);
 
         const fwdW = hasLOS ? (visibleDist > 13 ? 0.85 : visibleDist < 5.5 ? -0.6 : 0.2) : 1.0;
         const strW = hasLOS ? 0.92 : 0.35;
-        let dirX = toT.x * fwdW + (-toT.z * bot.strafeDir) * strW;
-        let dirZ = toT.z * fwdW + (toT.x * bot.strafeDir) * strW;
+        let dirX = _toGoalVec.x * fwdW + (-_toGoalVec.z * bot.strafeDir) * strW;
+        let dirZ = _toGoalVec.z * fwdW + (_toGoalVec.x * bot.strafeDir) * strW;
         const len = Math.hypot(dirX, dirZ) || 1;
         dirX /= len; dirZ /= len;
 
@@ -1754,17 +1811,17 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
               bot.burstShotTimer = 0.14;
               if (bot.burstShotsLeft <= 0) bot.attackCooldown = 0.65 + Math.random() * 0.5;
 
-              const muzzlePos = new THREE.Vector3(bot.group.position.x, 1.35, bot.group.position.z);
+              _muzzleVec.set(bot.group.position.x, 1.35, bot.group.position.z);
               const tracerColor = bot.team === 'CT' ? 0x60a5fa : 0xfbbf24;
 
               if (activeTarget.isPlayer) {
                 const hitPlayer = Math.random() < 0.58;
-                const endPos = new THREE.Vector3(
+                _endVec.set(
                   player.pos.x + (Math.random() - 0.5) * (hitPlayer ? 0.2 : 1.5),
                   player.pos.y - 0.25,
                   player.pos.z + (Math.random() - 0.5) * (hitPlayer ? 0.2 : 1.5)
                 );
-                spawnBulletTracer(muzzlePos, endPos, tracerColor);
+                spawnBulletTracer(_muzzleVec, _endVec, tracerColor);
 
                 if (hitPlayer) {
                   player.hp = Math.max(0, player.hp - 9);
@@ -1777,10 +1834,11 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
                   }
                 }
               } else if (activeTarget.ref) {
-                const endPos = new THREE.Vector3(activeTarget.ref.group.position.x, 1.25, activeTarget.ref.group.position.z);
-                spawnBulletTracer(muzzlePos, endPos, tracerColor);
+                _endVec.set(activeTarget.ref.group.position.x, 1.25, activeTarget.ref.group.position.z);
+                spawnBulletTracer(_muzzleVec, _endVec, tracerColor);
                 if (Math.random() < 0.6) {
                   activeTarget.ref.hp -= 18;
+                  activeTarget.ref.recentlyDamaged = 2.0;
                   if (activeTarget.ref.hp <= 0) {
                     scene.remove(activeTarget.ref.group);
                     const idx = bots.indexOf(activeTarget.ref);
@@ -1802,9 +1860,40 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
       updateHUD();
     }
 
+    const maxNativePR = Math.min(window.devicePixelRatio || 1, 1.75);
+    let adaptiveTier = 2;
+    const frameRing = new Float32Array(45);
+    let frameRingIdx = 0, frameRingCount = 0, adaptiveCooldown = 2.0;
+
+    function updateStandaloneAdaptiveQuality(rawDt) {
+      const ms = rawDt * 1000;
+      if (ms > 0.5 && ms < 120) {
+        frameRing[frameRingIdx] = ms;
+        frameRingIdx = (frameRingIdx + 1) % frameRing.length;
+        if (frameRingCount < frameRing.length) frameRingCount++;
+      }
+      if (adaptiveCooldown > 0) { adaptiveCooldown -= rawDt; return; }
+      if (frameRingCount < frameRing.length) return;
+      let sum = 0;
+      for (let i = 0; i < frameRingCount; i++) sum += frameRing[i];
+      const avg = sum / frameRingCount;
+      if (avg > 20.0 && adaptiveTier > 0) {
+        adaptiveTier--;
+        renderer.setPixelRatio(adaptiveTier === 1 ? Math.max(1.0, +(maxNativePR * 0.82).toFixed(2)) : 1.0);
+        adaptiveCooldown = 2.2;
+      } else if (avg < 17.5 && adaptiveTier < 2) {
+        adaptiveTier++;
+        renderer.setPixelRatio(adaptiveTier === 2 ? maxNativePR : Math.max(1.0, +(maxNativePR * 0.82).toFixed(2)));
+        adaptiveCooldown = 3.0;
+      }
+    }
+
     function animate() {
       requestAnimationFrame(animate);
-      update(Math.min(clock.getDelta(), 0.05));
+      const rawDt = clock.getDelta();
+      if (document.hidden) return;
+      if (isPointerLocked && !isBuyMenuOpen) updateStandaloneAdaptiveQuality(rawDt);
+      update(Math.min(rawDt, 0.05));
       renderer.render(scene, camera);
     }
 
@@ -1851,7 +1940,8 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
       camera.rotation.order = 'YXZ';
       scene.add(camera);
 
-      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+      renderer.setPixelRatio(maxNativePR);
       renderer.setSize(window.innerWidth, window.innerHeight);
       document.getElementById('game-container').appendChild(renderer.domElement);
 
@@ -1859,6 +1949,8 @@ export const STANDALONE_HTML_SOURCE = `<!DOCTYPE html>
       const sun = new THREE.DirectionalLight(0xfff0cc, 1.3);
       sun.position.set(25, 42, 20);
       scene.add(sun);
+
+      initTracerPool();
 
       const floor = new THREE.Mesh(new THREE.PlaneGeometry(64, 64), new THREE.MeshStandardMaterial({ color: 0xe3c18f, roughness: 0.9 }));
       floor.rotation.x = -Math.PI / 2;

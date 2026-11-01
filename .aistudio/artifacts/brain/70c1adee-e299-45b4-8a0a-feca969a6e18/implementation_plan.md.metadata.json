@@ -1,6 +1,6 @@
 {
-  "summary":  "Plano arquitetural e visual para o refinamento do sistema de armas em 1ª pessoa (Viewmodels GLB, anatomia e empunhadura individual de mãos/braços por arma, calibração de escala/enquadramento competitivo e isolamento estrito da faca/baioneta no Slot 1).",
-  "updatedAt":  "2026-11-01T15:49:38.320790453Z",
+  "summary":  "Plano técnico completo para otimização de performance do FPS 3D (Renderização Three.js, Object Pooling de partículas/traçantes/decals, Percepção escalonada e Raycasting reutilizável da IA Tática dos Bots, Qualidade Gráfica Adaptativa silenciosa com histerese em 60 FPS, Gerenciamento de Memória/Materiais e sincronização com o exportador HTML standalone), preservando 100% das funcionalidades existentes.",
+  "updatedAt":  "2026-11-01T16:20:32.783059678Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

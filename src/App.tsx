@@ -89,6 +89,7 @@ import {
   findNearestWaypointIndex,
   findTacticalPath,
   isTargetWithinBotVisionCone,
+  isSegmentBlockedByAABBColliders,
   smoothBotYawTowards,
   classifySector,
 } from './botTacticalAI';
@@ -217,19 +218,25 @@ interface SparkParticle {
   mesh: THREE.Mesh;
   vel: THREE.Vector3;
   life: number;
+  active: boolean;
 }
 
 interface BulletTracer {
   mesh: THREE.Mesh;
+  mat: THREE.MeshBasicMaterial;
   life: number;
   maxLife: number;
+  active: boolean;
 }
 
+const MAX_SPARK_POOL = 72;
+const MAX_TRACER_POOL = 28;
+const MAX_DECAL_POOL = 56;
 
 // Ângulos dos sensores de desvio (Whiskers) para contornar paredes e caixas suavemente
 const STEER_ANGLES = [0, 0.42, -0.42, 0.85, -0.85, 1.3, -1.3, 1.75, -1.75];
 
-// Vetores reutilizáveis fora do loop de renderização (Zero GC no Game Loop)
+// Vetores e Raycasters reutilizáveis fora do loop de renderização (Zero GC no Game Loop)
 const _forward = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _moveDir = new THREE.Vector3();
@@ -237,7 +244,18 @@ const _toTarget = new THREE.Vector3();
 const _eyeOrigin = new THREE.Vector3();
 const _rayDir = new THREE.Vector3();
 const _ndcCenter = new THREE.Vector2(0, 0);
+const _pelletNdc = new THREE.Vector2(0, 0);
 const _zeroVel = new THREE.Vector3(0, 0, 0);
+const _upNormal = new THREE.Vector3(0, 1, 0);
+const _muzzleWorldOrigin = new THREE.Vector3();
+const _botMuzzleWorld = new THREE.Vector3();
+const _otherEyePos = new THREE.Vector3();
+const _tmpHitEnd = new THREE.Vector3();
+const _tmpDecalLook = new THREE.Vector3();
+const _spectatorCamTarget = new THREE.Vector3();
+const _sharedShotRaycaster = new THREE.Raycaster();
+const _sharedLosRaycaster = new THREE.Raycaster();
+const _shotTargetsBuffer: THREE.Object3D[] = [];
 
 const CT_BOT_NAMES = [
   'PM_Capitao',
@@ -507,10 +525,148 @@ export default function App() {
     let mapTopology: MapTacticalTopology | null = null;
     let matchBlackboard: MatchTacticalBlackboard = createMatchTacticalBlackboard();
     let blackboardPruneTimer = 0;
+    let perceptionFrameTick = 0;
     const bots: BotEntity[] = [];
-    const decals: THREE.Mesh[] = [];
-    const sparks: SparkParticle[] = [];
-    const tracers: BulletTracer[] = [];
+
+    // =========================================================================
+    // OBJECT POOLING: Faíscas (Sparks), Traçantes (Tracers) e Decals de Impacto
+    // =========================================================================
+    const sparkPool: SparkParticle[] = [];
+    const activeSparks: SparkParticle[] = [];
+    const sparkGeo = new THREE.BoxGeometry(0.05, 0.05, 0.05);
+    const sparkMaterials = new Map<number, THREE.MeshBasicMaterial>();
+
+    const getSparkMaterial = (colorHex: number): THREE.MeshBasicMaterial => {
+      let mat = sparkMaterials.get(colorHex);
+      if (!mat) {
+        mat = new THREE.MeshBasicMaterial({ color: colorHex });
+        sparkMaterials.set(colorHex, mat);
+      }
+      return mat;
+    };
+
+    const tracerPool: BulletTracer[] = [];
+    const activeTracers: BulletTracer[] = [];
+    const tracerUnitGeo = new THREE.BoxGeometry(0.028, 0.028, 1.0);
+
+    const decalPool: THREE.Mesh[] = [];
+    let decalRingIndex = 0;
+    const decalUnitGeo = new THREE.PlaneGeometry(1.0, 1.0);
+    const decalBulletMat = new THREE.MeshBasicMaterial({
+      color: 0x141414,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    const decalKnifeMat = new THREE.MeshBasicMaterial({
+      color: 0x262626,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+
+    const initCombatEffectPools = () => {
+      const defaultSparkMat = getSparkMaterial(0xfbbf24);
+      for (let i = 0; i < MAX_SPARK_POOL; i++) {
+        const mesh = new THREE.Mesh(sparkGeo, defaultSparkMat);
+        mesh.visible = false;
+        scene.add(mesh);
+        sparkPool.push({
+          mesh,
+          vel: new THREE.Vector3(),
+          life: 0,
+          active: false,
+        });
+      }
+
+      for (let i = 0; i < MAX_TRACER_POOL; i++) {
+        const mat = new THREE.MeshBasicMaterial({
+          color: 0xfbbf24,
+          transparent: true,
+          opacity: 0.88,
+        });
+        const mesh = new THREE.Mesh(tracerUnitGeo, mat);
+        mesh.visible = false;
+        scene.add(mesh);
+        tracerPool.push({
+          mesh,
+          mat,
+          life: 0,
+          maxLife: 0.085,
+          active: false,
+        });
+      }
+
+      for (let i = 0; i < MAX_DECAL_POOL; i++) {
+        const mesh = new THREE.Mesh(decalUnitGeo, decalBulletMat);
+        mesh.visible = false;
+        scene.add(mesh);
+        decalPool.push(mesh);
+      }
+    };
+
+    // =========================================================================
+    // SISTEMA DE QUALIDADE GRÁFICA ADAPTATIVA SILENCIOSA (Alvo 60 FPS com Histerese)
+    // =========================================================================
+    const maxNativePixelRatio = isSoftwareGl
+      ? 1.0
+      : Math.min(window.devicePixelRatio || 1, 1.75);
+    let adaptiveQualityTier = 2; // 2 = Nativo/Alto, 1 = Equilibrado, 0 = Desempenho
+    let adaptiveSparkCount = 6;
+    const frameTimeSamples = new Float32Array(45);
+    let frameSampleIndex = 0;
+    let frameSampleFilled = 0;
+    let adaptiveCooldownSec = 2.0;
+
+    const applyAdaptiveQualityTier = (tier: number) => {
+      adaptiveQualityTier = Math.max(0, Math.min(2, tier));
+      if (!renderer || isSoftwareGl) return;
+      if (adaptiveQualityTier === 2) {
+        renderer.setPixelRatio(maxNativePixelRatio);
+        adaptiveSparkCount = 6;
+      } else if (adaptiveQualityTier === 1) {
+        renderer.setPixelRatio(Math.max(1.0, +(maxNativePixelRatio * 0.82).toFixed(2)));
+        adaptiveSparkCount = 4;
+      } else {
+        renderer.setPixelRatio(1.0);
+        adaptiveSparkCount = 3;
+      }
+    };
+
+    const updateAdaptiveQuality = (rawDt: number) => {
+      if (isSoftwareGl) return;
+      const frameMs = rawDt * 1000;
+      // Ignora spikes de troca de aba/carregamento (> 120ms) na média móvel
+      if (frameMs > 0.5 && frameMs < 120) {
+        frameTimeSamples[frameSampleIndex] = frameMs;
+        frameSampleIndex = (frameSampleIndex + 1) % frameTimeSamples.length;
+        if (frameSampleFilled < frameTimeSamples.length) {
+          frameSampleFilled++;
+        }
+      }
+
+      if (adaptiveCooldownSec > 0) {
+        adaptiveCooldownSec -= rawDt;
+        return;
+      }
+      if (frameSampleFilled < frameTimeSamples.length) return;
+
+      let sumMs = 0;
+      for (let i = 0; i < frameSampleFilled; i++) {
+        sumMs += frameTimeSamples[i];
+      }
+      const avgFrameMs = sumMs / frameSampleFilled;
+
+      // Abaixo de 50 FPS (avgFrameMs > 20.0ms): reduz suavemente PixelRatio e faíscas
+      if (avgFrameMs > 20.0 && adaptiveQualityTier > 0) {
+        applyAdaptiveQualityTier(adaptiveQualityTier - 1);
+        adaptiveCooldownSec = 2.2;
+      } else if (avgFrameMs < 17.5 && adaptiveQualityTier < 2) {
+        // Acima de 57.1 FPS (avgFrameMs < 17.5ms) sustentado: restaura qualidade
+        applyAdaptiveQualityTier(adaptiveQualityTier + 1);
+        adaptiveCooldownSec = 3.0;
+      }
+    };
 
     const keys: Record<string, boolean> = {};
     let isMouseDown = false;
@@ -837,11 +993,21 @@ export default function App() {
 
     // Carrega ou troca o mapa 3D ativo sob demanda, liberando VRAM do mapa anterior
     const loadArenaMap = (mapId: MapId) => {
-      for (let i = decals.length - 1; i >= 0; i--) {
-        scene.remove(decals[i]);
-        decals[i].geometry.dispose();
+      // Oculta os decals e efeitos do pool para o novo mapa sem realocar geometrias
+      for (let i = 0; i < decalPool.length; i++) {
+        decalPool[i].visible = false;
       }
-      decals.length = 0;
+      decalRingIndex = 0;
+      for (let i = 0; i < activeSparks.length; i++) {
+        activeSparks[i].mesh.visible = false;
+        activeSparks[i].active = false;
+      }
+      activeSparks.length = 0;
+      for (let i = 0; i < activeTracers.length; i++) {
+        activeTracers[i].mesh.visible = false;
+        activeTracers[i].active = false;
+      }
+      activeTracers.length = 0;
 
       if (currentBuiltMap) {
         scene.remove(currentBuiltMap.mapGroup);
@@ -1256,45 +1422,72 @@ export default function App() {
     };
 
     const spawnImpactSparks = (point: THREE.Vector3, normal: THREE.Vector3, colorHex: number) => {
-      const geo = new THREE.BoxGeometry(0.05, 0.05, 0.05);
-      const mat = new THREE.MeshBasicMaterial({ color: colorHex });
-      for (let i = 0; i < 6; i++) {
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.copy(point);
-        const vel = normal
-          .clone()
-          .multiplyScalar(2.5 + Math.random() * 3)
-          .add(
-            new THREE.Vector3(
-              (Math.random() - 0.5) * 3,
-              Math.random() * 2.5,
-              (Math.random() - 0.5) * 3
-            )
-          );
-        scene.add(mesh);
-        sparks.push({ mesh, vel, life: 0.28 + Math.random() * 0.15 });
+      if (sparkPool.length === 0) return;
+      const mat = getSparkMaterial(colorHex);
+      const count = adaptiveSparkCount;
+
+      for (let i = 0; i < count; i++) {
+        let sp: SparkParticle | undefined;
+        for (let k = 0; k < sparkPool.length; k++) {
+          if (!sparkPool[k].active) {
+            sp = sparkPool[k];
+            break;
+          }
+        }
+        if (!sp) {
+          sp = activeSparks.shift();
+          if (!sp) break;
+        } else {
+          sp.active = true;
+        }
+
+        sp.mesh.material = mat;
+        sp.mesh.position.copy(point);
+        const speed = 2.5 + Math.random() * 3.0;
+        sp.vel.set(
+          normal.x * speed + (Math.random() - 0.5) * 3.0,
+          normal.y * speed + Math.random() * 2.5,
+          normal.z * speed + (Math.random() - 0.5) * 3.0
+        );
+        sp.life = 0.28 + Math.random() * 0.15;
+        sp.mesh.visible = true;
+        activeSparks.push(sp);
       }
     };
 
-    // Desenha um Rastro de Bala 3D (Bullet Tracer) visível entre a arma e o ponto de impacto
+    // Desenha um Rastro de Bala 3D (Bullet Tracer) visível entre a arma e o ponto de impacto usando Object Pool
     const spawnBulletTracer = (
       startPos: THREE.Vector3,
       endPos: THREE.Vector3,
       colorHex: number
     ) => {
+      if (tracerPool.length === 0) return;
       const dist = startPos.distanceTo(endPos);
       if (dist < 0.4) return;
-      const geo = new THREE.BoxGeometry(0.028, 0.028, dist);
-      const mat = new THREE.MeshBasicMaterial({
-        color: colorHex,
-        transparent: true,
-        opacity: 0.88,
-      });
-      const tracerMesh = new THREE.Mesh(geo, mat);
-      tracerMesh.position.copy(startPos).lerp(endPos, 0.5);
-      tracerMesh.lookAt(endPos);
-      scene.add(tracerMesh);
-      tracers.push({ mesh: tracerMesh, life: 0.085, maxLife: 0.085 });
+
+      let tr: BulletTracer | undefined;
+      for (let k = 0; k < tracerPool.length; k++) {
+        if (!tracerPool[k].active) {
+          tr = tracerPool[k];
+          break;
+        }
+      }
+      if (!tr) {
+        tr = activeTracers.shift();
+        if (!tr) return;
+      } else {
+        tr.active = true;
+      }
+
+      tr.mat.color.setHex(colorHex);
+      tr.mat.opacity = 0.88;
+      tr.mesh.scale.set(1, 1, dist);
+      tr.mesh.position.copy(startPos).lerp(endPos, 0.5);
+      tr.mesh.lookAt(endPos);
+      tr.life = 0.085;
+      tr.maxLife = 0.085;
+      tr.mesh.visible = true;
+      activeTracers.push(tr);
     };
 
     const startReload = () => {
@@ -1365,12 +1558,13 @@ export default function App() {
         }, 45);
       }
 
-      const raycaster = new THREE.Raycaster();
-      const botHitboxes: THREE.Object3D[] = [];
+      _shotTargetsBuffer.length = 0;
       for (let i = 0; i < bots.length; i++) {
-        botHitboxes.push(bots[i].headMesh, bots[i].torsoMesh);
+        _shotTargetsBuffer.push(bots[i].headMesh, bots[i].torsoMesh);
       }
-      const targets = [...botHitboxes, ...shootableMeshes];
+      for (let i = 0; i < shootableMeshes.length; i++) {
+        _shotTargetsBuffer.push(shootableMeshes[i]);
+      }
 
       const pelletCount = spec.pellets || 1;
       let hitAnythingOverall = false;
@@ -1378,35 +1572,33 @@ export default function App() {
       let hitFriendlyWarningShown = false;
 
       // Posição de origem do cano para desenhar os Tracers dos balins da Shotgun / Armas
-      const muzzleWorldOrigin = new THREE.Vector3();
       if (muzzleFlashMesh) {
-        muzzleFlashMesh.getWorldPosition(muzzleWorldOrigin);
+        muzzleFlashMesh.getWorldPosition(_muzzleWorldOrigin);
       } else {
-        muzzleWorldOrigin.copy(camera.position);
+        _muzzleWorldOrigin.copy(camera.position);
       }
 
-      for (let p = 0; p < pelletCount; p++) {
-        const pelletNdc =
-          pelletCount > 1
-            ? new THREE.Vector2(
-                (Math.random() - 0.5) * spec.spread * 1.45,
-                (Math.random() - 0.5) * spec.spread * 1.45
-              )
-            : _ndcCenter;
+      _sharedShotRaycaster.far = spec.isMelee ? spec.maxRange || 3.4 : Infinity;
 
-        raycaster.setFromCamera(pelletNdc, camera);
-        if (spec.isMelee) {
-          raycaster.far = spec.maxRange || 3.4;
+      for (let p = 0; p < pelletCount; p++) {
+        if (pelletCount > 1) {
+          _pelletNdc.set(
+            (Math.random() - 0.5) * spec.spread * 1.45,
+            (Math.random() - 0.5) * spec.spread * 1.45
+          );
+          _sharedShotRaycaster.setFromCamera(_pelletNdc, camera);
+        } else {
+          _sharedShotRaycaster.setFromCamera(_ndcCenter, camera);
         }
 
-        const intersects = raycaster.intersectObjects(targets, false);
+        const intersects = _sharedShotRaycaster.intersectObjects(_shotTargetsBuffer, false);
         if (intersects.length > 0) {
           hitAnythingOverall = true;
           const hit = intersects[0];
           const hitBot = hit.object.userData?.bot as BotEntity | undefined;
 
           if (!spec.isMelee && pelletCount > 1) {
-            spawnBulletTracer(muzzleWorldOrigin, hit.point, 0xfbbf24);
+            spawnBulletTracer(_muzzleWorldOrigin, hit.point, 0xfbbf24);
           }
 
           if (hitBot) {
@@ -1443,16 +1635,21 @@ export default function App() {
             // Notifica silenciosamente o Blackboard da equipe do bot atingido (pedido de suporte / posição do atacante)
             const botTeamBB = matchBlackboard.teams[hitBot.team];
             botTeamBB.allyUnderFireId = hitBot.id;
-            botTeamBB.allyUnderFirePos = hitBot.group.position.clone();
+            if (!botTeamBB.allyUnderFirePos) {
+              botTeamBB.allyUnderFirePos = hitBot.group.position.clone();
+            } else {
+              botTeamBB.allyUnderFirePos.copy(hitBot.group.position);
+            }
             botTeamBB.allyUnderFireTime = matchBlackboard.elapsedTime;
-            botTeamBB.knownEnemies.set('PLAYER', {
-              targetId: 'PLAYER',
-              lastKnownPos: player.pos.clone(),
-              estimatedVelocity: player.vel.clone(),
-              lastSeenTime: matchBlackboard.elapsedTime,
-              isVisualConfirmation: true,
-              reportedByBotId: hitBot.id,
-            });
+            recordKnownEnemyInBlackboard(
+              botTeamBB,
+              'PLAYER',
+              player.pos,
+              player.vel,
+              matchBlackboard.elapsedTime,
+              hitBot.id,
+              true
+            );
 
             const pStats = matchStatsMap.get('PLAYER');
             if (pStats) {
@@ -1466,7 +1663,7 @@ export default function App() {
 
             spawnImpactSparks(
               hit.point,
-              hit.face ? hit.face.normal : new THREE.Vector3(0, 1, 0),
+              hit.face ? hit.face.normal : _upNormal,
               isHeadshot ? 0xfbbf24 : 0xef4444
             );
 
@@ -1535,25 +1732,16 @@ export default function App() {
               audioRef.current.playEnemyHit(isHeadshot, false);
             }
           } else if (hit.face) {
-            const decalSize = spec.isMelee ? 0.24 : pelletCount > 1 ? 0.1 : 0.17;
-            const decalGeo = new THREE.PlaneGeometry(decalSize, spec.isMelee ? 0.04 : decalSize);
-            const decalMat = new THREE.MeshBasicMaterial({
-              color: spec.isMelee ? 0x262626 : 0x141414,
-              polygonOffset: true,
-              polygonOffsetFactor: -2,
-              polygonOffsetUnits: -2,
-            });
-            const decal = new THREE.Mesh(decalGeo, decalMat);
-            decal.position.copy(hit.point).addScaledVector(hit.face.normal, 0.015);
-            decal.lookAt(hit.point.clone().add(hit.face.normal));
-            scene.add(decal);
-            decals.push(decal);
-            if (decals.length > 55) {
-              const old = decals.shift();
-              if (old) {
-                scene.remove(old);
-                old.geometry.dispose();
-              }
+            if (decalPool.length > 0) {
+              const decal = decalPool[decalRingIndex];
+              decalRingIndex = (decalRingIndex + 1) % decalPool.length;
+              const decalSize = spec.isMelee ? 0.24 : pelletCount > 1 ? 0.1 : 0.17;
+              decal.material = spec.isMelee ? decalKnifeMat : decalBulletMat;
+              decal.scale.set(decalSize, spec.isMelee ? 0.04 : decalSize, 1);
+              decal.position.copy(hit.point).addScaledVector(hit.face.normal, 0.015);
+              _tmpDecalLook.copy(hit.point).add(hit.face.normal);
+              decal.lookAt(_tmpDecalLook);
+              decal.visible = true;
             }
             if (p === 0 || pelletCount <= 3 || p % 2 === 0) {
               spawnImpactSparks(hit.point, hit.face.normal, spec.isMelee ? 0xe5e7eb : 0xf59e0b);
@@ -1711,7 +1899,7 @@ export default function App() {
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
       renderer.toneMappingExposure = 1.08;
-      renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
+      applyAdaptiveQualityTier(2);
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.shadowMap.enabled = !isSoftwareGl;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -1736,6 +1924,7 @@ export default function App() {
       sunLight.shadow.bias = -0.0005;
       scene.add(sunLight);
 
+      initCombatEffectPools();
       preloadWeaponGlbModels(player.loadout);
       loadArenaMap(player.mapId);
       initMatchStats();
@@ -1763,27 +1952,34 @@ export default function App() {
         if (player.wheelFlashTimer <= 0) syncHud();
       }
 
-      for (let i = sparks.length - 1; i >= 0; i--) {
-        const sp = sparks[i];
+      for (let i = activeSparks.length - 1; i >= 0; i--) {
+        const sp = activeSparks[i];
         sp.life -= dt;
         sp.vel.y -= 9.8 * dt;
         sp.mesh.position.addScaledVector(sp.vel, dt);
         if (sp.life <= 0) {
-          scene.remove(sp.mesh);
-          sparks.splice(i, 1);
+          sp.mesh.visible = false;
+          sp.active = false;
+          const lastIdx = activeSparks.length - 1;
+          if (i !== lastIdx) {
+            activeSparks[i] = activeSparks[lastIdx];
+          }
+          activeSparks.pop();
         }
       }
 
-      for (let i = tracers.length - 1; i >= 0; i--) {
-        const tr = tracers[i];
+      for (let i = activeTracers.length - 1; i >= 0; i--) {
+        const tr = activeTracers[i];
         tr.life -= dt;
-        const mat = tr.mesh.material as THREE.MeshBasicMaterial;
-        mat.opacity = Math.max(0, (tr.life / tr.maxLife) * 0.88);
+        tr.mat.opacity = Math.max(0, (tr.life / tr.maxLife) * 0.88);
         if (tr.life <= 0) {
-          scene.remove(tr.mesh);
-          tr.mesh.geometry.dispose();
-          mat.dispose();
-          tracers.splice(i, 1);
+          tr.mesh.visible = false;
+          tr.active = false;
+          const lastIdx = activeTracers.length - 1;
+          if (i !== lastIdx) {
+            activeTracers[i] = activeTracers[lastIdx];
+          }
+          activeTracers.pop();
         }
       }
 
@@ -2034,12 +2230,12 @@ export default function App() {
         // MODO ESPECTADOR ALIADO (Quando o jogador morreu mas ainda há bots aliados vivos no round)
         const ally = getFirstLivingAllyBot();
         if (ally) {
-          const targetCamPos = new THREE.Vector3(
+          _spectatorCamTarget.set(
             ally.group.position.x - Math.sin(ally.group.rotation.y) * 3.8,
             2.6,
             ally.group.position.z - Math.cos(ally.group.rotation.y) * 3.8
           );
-          camera.position.lerp(targetCamPos, Math.min(1, dt * 8));
+          camera.position.lerp(_spectatorCamTarget, Math.min(1, dt * 8));
           camera.lookAt(
             ally.group.position.x,
             1.4,
@@ -2068,25 +2264,42 @@ export default function App() {
         pruneExpiredBlackboardIntel(matchBlackboard, 3.0);
       }
 
+      perceptionFrameTick = (perceptionFrameTick + 1) & 0x7fffffff;
+
       const diffProfile =
         BOT_DIFFICULTY_PROFILES[gameRef.current.botDifficulty] ||
         BOT_DIFFICULTY_PROFILES.normal;
 
-      const losRay = new THREE.Raycaster();
-
-      // Auxiliar para verificar se o Bot tem Linha de Visão (LOS) limpa até um ponto (suporta altura 3D das lajes)
+      // Auxiliar para verificar se o Bot tem Linha de Visão (LOS) limpa até um ponto
+      // Usa pré-filtro rápido por AABB (nanossegundos) antes de testar as malhas 3D com Raycaster reutilizado
       const checkBotLineOfSight = (
         botPos: THREE.Vector3,
         targetEyePos: THREE.Vector3
       ): boolean => {
-        _eyeOrigin.set(botPos.x, botPos.y + 1.52, botPos.z);
-        _rayDir.copy(targetEyePos).sub(_eyeOrigin);
-        const fullDist = _rayDir.length();
-        if (fullDist < 0.2) return true;
-        _rayDir.divideScalar(fullDist);
-        losRay.set(_eyeOrigin, _rayDir);
-        losRay.far = fullDist;
-        const wallHits = losRay.intersectObjects(shootableMeshes, false);
+        const ax = botPos.x;
+        const ay = botPos.y + 1.52;
+        const az = botPos.z;
+        const bx = targetEyePos.x;
+        const by = targetEyePos.y;
+        const bz = targetEyePos.z;
+
+        const dx = bx - ax;
+        const dy = by - ay;
+        const dz = bz - az;
+        const fullDistSq = dx * dx + dy * dy + dz * dz;
+        if (fullDistSq < 0.04) return true;
+
+        // Pré-filtro rápido contra AABBs de paredes, caixas e colunas
+        if (isSegmentBlockedByAABBColliders(ax, ay, az, bx, by, bz, colliders)) {
+          return false;
+        }
+
+        const fullDist = Math.sqrt(fullDistSq);
+        _eyeOrigin.set(ax, ay, az);
+        _rayDir.set(dx / fullDist, dy / fullDist, dz / fullDist);
+        _sharedLosRaycaster.set(_eyeOrigin, _rayDir);
+        _sharedLosRaycaster.far = fullDist;
+        const wallHits = _sharedLosRaycaster.intersectObjects(shootableMeshes, false);
         return wallHits.length === 0 || wallHits[0].distance >= fullDist - 0.35;
       };
 
@@ -2117,79 +2330,117 @@ export default function App() {
           brain.recentlyDamagedTimer = Math.max(0, brain.recentlyDamagedTimer - dt);
         }
 
-        // 1. PERCEPÇÃO VISUAL LEGÍTIMA (SEM WALLHACK: requer cone de visão ou reação a dano + Raycast 3D)
+        // 1. PERCEPÇÃO VISUAL LEGÍTIMA ESCALONADA:
+        // - Instantânea (todo frame) em combate ativo, reação a dano ou ameaça próxima (< 18m)
+        // - Escalonada em 2 frames alternados durante patrulha/avanço sem contato
         let bestEnemyBot: BotEntity | null = null;
         let targetIsPlayer = false;
         let bestVisibleDist = Infinity;
         let visibleEnemyCount = 0;
 
-        for (let j = 0; j < bots.length; j++) {
-          const other = bots[j];
-          if (other.team !== bot.team && other.hp > 0) {
-            const d = bot.group.position.distanceTo(other.group.position);
-            if (d > 58) continue;
-
-            const inCone =
-              brain.recentlyDamagedTimer > 0 ||
-              isTargetWithinBotVisionCone(
-                bot.group.position,
-                bot.group.rotation.y,
-                other.group.position,
-                diffProfile.fovCosine
-              );
-            if (!inCone) continue;
-
-            const otherEye = new THREE.Vector3(
-              other.group.position.x,
-              other.group.position.y + 1.48,
-              other.group.position.z
-            );
-            if (checkBotLineOfSight(bot.group.position, otherEye)) {
-              visibleEnemyCount++;
-              // Prioriza inimigos mais próximos ou já engajados pelo bot
-              const priorityDist =
-                brain.currentTargetId === `BOT_${other.id}` ? d * 0.82 : d;
-              if (priorityDist < bestVisibleDist) {
-                bestVisibleDist = d;
-                bestEnemyBot = other;
-                targetIsPlayer = false;
-              }
-            }
-          }
-        }
-
+        let hasCloseEnemy = false;
         if (!player.isDead && player.team !== bot.team) {
-          const distToPlayer = bot.group.position.distanceTo(player.pos);
-          if (distToPlayer <= 58) {
-            const inCone =
-              brain.recentlyDamagedTimer > 0 ||
-              isTargetWithinBotVisionCone(
-                bot.group.position,
-                bot.group.rotation.y,
-                player.pos,
-                diffProfile.fovCosine
-              );
-            if (inCone && checkBotLineOfSight(bot.group.position, player.pos)) {
-              visibleEnemyCount++;
-              const priorityDist =
-                brain.currentTargetId === 'PLAYER' ? distToPlayer * 0.82 : distToPlayer;
-              if (priorityDist < bestVisibleDist) {
-                bestVisibleDist = distToPlayer;
-                bestEnemyBot = null;
-                targetIsPlayer = true;
-              }
+          if (bot.group.position.distanceToSquared(player.pos) <= 324) {
+            hasCloseEnemy = true;
+          }
+        }
+        if (!hasCloseEnemy) {
+          for (let j = 0; j < bots.length; j++) {
+            const other = bots[j];
+            if (
+              other.team !== bot.team &&
+              other.hp > 0 &&
+              bot.group.position.distanceToSquared(other.group.position) <= 324
+            ) {
+              hasCloseEnemy = true;
+              break;
             }
           }
         }
 
-        const hasLOS = bestVisibleDist < Infinity;
-        const spottedId = hasLOS
-          ? targetIsPlayer
-            ? 'PLAYER'
-            : bestEnemyBot
-            ? `BOT_${bestEnemyBot.id}`
-            : null
-          : null;
+        const shouldRunFullPerception =
+          hasCloseEnemy ||
+          brain.recentlyDamagedTimer > 0 ||
+          brain.cachedHasLOS ||
+          brain.state === 'ENGAGE' ||
+          brain.state === 'PEEK_FIRE' ||
+          brain.state === 'SEEK_COVER' ||
+          ((perceptionFrameTick + bot.id) & 1) === 0;
+
+        if (shouldRunFullPerception) {
+          for (let j = 0; j < bots.length; j++) {
+            const other = bots[j];
+            if (other.team !== bot.team && other.hp > 0) {
+              const d = bot.group.position.distanceTo(other.group.position);
+              if (d > 58) continue;
+
+              const inCone =
+                brain.recentlyDamagedTimer > 0 ||
+                isTargetWithinBotVisionCone(
+                  bot.group.position,
+                  bot.group.rotation.y,
+                  other.group.position,
+                  diffProfile.fovCosine
+                );
+              if (!inCone) continue;
+
+              _otherEyePos.set(
+                other.group.position.x,
+                other.group.position.y + 1.48,
+                other.group.position.z
+              );
+              if (checkBotLineOfSight(bot.group.position, _otherEyePos)) {
+                visibleEnemyCount++;
+                // Prioriza inimigos mais próximos ou já engajados pelo bot
+                const priorityDist =
+                  brain.currentTargetId === `BOT_${other.id}` ? d * 0.82 : d;
+                if (priorityDist < bestVisibleDist) {
+                  bestVisibleDist = d;
+                  bestEnemyBot = other;
+                  targetIsPlayer = false;
+                }
+              }
+            }
+          }
+
+          if (!player.isDead && player.team !== bot.team) {
+            const distToPlayer = bot.group.position.distanceTo(player.pos);
+            if (distToPlayer <= 58) {
+              const inCone =
+                brain.recentlyDamagedTimer > 0 ||
+                isTargetWithinBotVisionCone(
+                  bot.group.position,
+                  bot.group.rotation.y,
+                  player.pos,
+                  diffProfile.fovCosine
+                );
+              if (inCone && checkBotLineOfSight(bot.group.position, player.pos)) {
+                visibleEnemyCount++;
+                const priorityDist =
+                  brain.currentTargetId === 'PLAYER' ? distToPlayer * 0.82 : distToPlayer;
+                if (priorityDist < bestVisibleDist) {
+                  bestVisibleDist = distToPlayer;
+                  bestEnemyBot = null;
+                  targetIsPlayer = true;
+                }
+              }
+            }
+          }
+
+          brain.cachedHasLOS = bestVisibleDist < Infinity;
+          brain.cachedVisibleDist = bestVisibleDist;
+          brain.cachedVisibleEnemyCount = visibleEnemyCount;
+          brain.cachedSpottedId = brain.cachedHasLOS
+            ? targetIsPlayer
+              ? 'PLAYER'
+              : bestEnemyBot
+              ? `BOT_${bestEnemyBot.id}`
+              : null
+            : null;
+        }
+
+        const hasLOS = brain.cachedHasLOS && bestVisibleDist < Infinity;
+        const spottedId = hasLOS ? brain.cachedSpottedId : null;
 
         // 2. ATUALIZAÇÃO DE MEMÓRIA DE COMBATE, TEMPO DE REAÇÃO HUMANO E COMUNICAÇÃO SILENCIOSA DE EQUIPE
         if (hasLOS && spottedId) {
@@ -2735,9 +2986,8 @@ export default function App() {
                 bot.muzzleFlash.visible = false;
               }, 50);
 
-              const muzzleWorld = new THREE.Vector3();
-              bot.muzzleFlash.getWorldPosition(muzzleWorld);
-              const distFromPlayerCam = muzzleWorld.distanceTo(camera.position);
+              bot.muzzleFlash.getWorldPosition(_botMuzzleWorld);
+              const distFromPlayerCam = _botMuzzleWorld.distanceTo(camera.position);
               audioRef.current.playBotGunshot(distFromPlayerCam, bot.team === 'CT');
 
               // Emite evento sonoro real no Blackboard para que bots adversários percebam o tiro
@@ -2770,12 +3020,12 @@ export default function App() {
                 const didHitPlayer = Math.random() < hitChance;
 
                 if (didHitPlayer) {
-                  const hitEnd = new THREE.Vector3(
+                  _tmpHitEnd.set(
                     player.pos.x + (Math.random() - 0.5) * 0.25,
                     player.pos.y - 0.25,
                     player.pos.z + (Math.random() - 0.5) * 0.25
                   );
-                  spawnBulletTracer(muzzleWorld, hitEnd, tracerColor);
+                  spawnBulletTracer(_botMuzzleWorld, _tmpHitEnd, tracerColor);
 
                   audioRef.current.playPlayerDamage();
                   const rawDamage = Math.max(
@@ -2805,7 +3055,11 @@ export default function App() {
                   // Notifica bots aliados do jogador que o jogador está sob fogo
                   const playerTeamBB = matchBlackboard.teams[player.team];
                   playerTeamBB.allyUnderFireId = 0;
-                  playerTeamBB.allyUnderFirePos = player.pos.clone();
+                  if (!playerTeamBB.allyUnderFirePos) {
+                    playerTeamBB.allyUnderFirePos = player.pos.clone();
+                  } else {
+                    playerTeamBB.allyUnderFirePos.copy(player.pos);
+                  }
                   playerTeamBB.allyUnderFireTime = matchBlackboard.elapsedTime;
 
                   setDamageFlash(true);
@@ -2855,22 +3109,22 @@ export default function App() {
                   syncHud();
                 } else {
                   // Tiro passou raspando pelo jogador (Tracer visível + faísca no cenário)
-                  const missEnd = new THREE.Vector3(
+                  _tmpHitEnd.set(
                     player.pos.x + (Math.random() - 0.5) * 1.6,
                     player.pos.y - 0.3 + (Math.random() - 0.5) * 0.8,
                     player.pos.z + (Math.random() - 0.5) * 1.6
                   );
-                  spawnBulletTracer(muzzleWorld, missEnd, tracerColor);
-                  spawnImpactSparks(missEnd, new THREE.Vector3(0, 1, 0), tracerColor);
+                  spawnBulletTracer(_botMuzzleWorld, _tmpHitEnd, tracerColor);
+                  spawnImpactSparks(_tmpHitEnd, _upNormal, tracerColor);
                 }
               } else if (bestEnemyBot) {
                 // Combate Tático Bot vs Bot com Tracer 3D e suporte de esquadrão
-                const botTargetCenter = new THREE.Vector3(
+                _tmpHitEnd.set(
                   bestEnemyBot.group.position.x + (Math.random() - 0.5) * 0.45,
                   bestEnemyBot.group.position.y + 1.25 + (Math.random() - 0.5) * 0.35,
                   bestEnemyBot.group.position.z + (Math.random() - 0.5) * 0.45
                 );
-                spawnBulletTracer(muzzleWorld, botTargetCenter, tracerColor);
+                spawnBulletTracer(_botMuzzleWorld, _tmpHitEnd, tracerColor);
 
                 const botVsBotHitChance = Math.min(
                   0.84,
@@ -2895,7 +3149,11 @@ export default function App() {
                   // Alerta o Blackboard da equipe da vítima para cobertura e suporte de aliados
                   const victimTeamBB = matchBlackboard.teams[bestEnemyBot.team];
                   victimTeamBB.allyUnderFireId = bestEnemyBot.id;
-                  victimTeamBB.allyUnderFirePos = bestEnemyBot.group.position.clone();
+                  if (!victimTeamBB.allyUnderFirePos) {
+                    victimTeamBB.allyUnderFirePos = bestEnemyBot.group.position.clone();
+                  } else {
+                    victimTeamBB.allyUnderFirePos.copy(bestEnemyBot.group.position);
+                  }
                   victimTeamBB.allyUnderFireTime = matchBlackboard.elapsedTime;
                   recordKnownEnemyInBlackboard(
                     victimTeamBB,
@@ -2913,7 +3171,7 @@ export default function App() {
                   bestEnemyBot.hitFlashTimer = 0.11;
                   bestEnemyBot.bodyMat.color.setHex(0xffffff);
                   bestEnemyBot.bodyMat.emissive.setHex(0x552222);
-                  spawnImpactSparks(botTargetCenter, new THREE.Vector3(0, 1, 0), 0xef4444);
+                  spawnImpactSparks(_tmpHitEnd, _upNormal, 0xef4444);
 
                   if (bestEnemyBot.hp <= 0) {
                     registerTacticalDeathEvent(
@@ -2969,7 +3227,7 @@ export default function App() {
     };
 
     /* ==========================================================================
-       3. ARQUITETURA animate() — Loop de Renderização
+       3. ARQUITETURA animate() — Loop de Renderização com Qualidade Adaptativa
        ========================================================================== */
     const afterDraw = (cb: () => void) => {
       const gl = renderer.getContext() as WebGL2RenderingContext;
@@ -2993,6 +3251,21 @@ export default function App() {
 
     const animate = () => {
       const rawDt = clock.getDelta();
+
+      // Pausa atualização e renderização quando a aba do navegador está oculta (economia total de CPU/GPU)
+      if (document.hidden) {
+        if (isSoftwareGl) {
+          afterDraw(animate);
+        } else {
+          frameId = requestAnimationFrame(animate);
+        }
+        return;
+      }
+
+      if (gameRef.current.gameMode === 'playing' && gameRef.current.isLocked) {
+        updateAdaptiveQuality(rawDt);
+      }
+
       const dt = Math.min(rawDt, 0.05);
       update(dt);
       renderer.render(scene, camera);
@@ -3188,6 +3461,13 @@ export default function App() {
       if (currentBuiltMap) {
         currentBuiltMap.dispose();
       }
+      sparkGeo.dispose();
+      tracerUnitGeo.dispose();
+      decalUnitGeo.dispose();
+      decalBulletMat.dispose();
+      decalKnifeMat.dispose();
+      sparkMaterials.forEach((m) => m.dispose());
+      tracerPool.forEach((t) => t.mat.dispose());
       document.removeEventListener('pointerlockchange', onPointerLockChange);
       window.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('mousemove', onMouseMove);

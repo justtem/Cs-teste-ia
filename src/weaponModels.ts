@@ -89,6 +89,107 @@ function getWeaponPalette(): WeaponMaterialPalette {
 }
 
 const _upAxis = new THREE.Vector3(0, 1, 0);
+const _tmpDelta = new THREE.Vector3();
+const _tmpDir = new THREE.Vector3();
+const _tmpMid = new THREE.Vector3();
+
+interface HandArmMaterialSet {
+  sleeveMat: THREE.MeshStandardMaterial;
+  gloveMat: THREE.MeshStandardMaterial;
+  knuckleMat: THREE.MeshStandardMaterial;
+  skinMat: THREE.MeshStandardMaterial;
+}
+
+const cachedHandArmMaterials: {
+  CT: HandArmMaterialSet | null;
+  TR: HandArmMaterialSet | null;
+} = {
+  CT: null,
+  TR: null,
+};
+
+function getHandArmMaterialSet(playerTeam: 'CT' | 'TR'): HandArmMaterialSet {
+  const existing = cachedHandArmMaterials[playerTeam];
+  if (existing) return existing;
+
+  const isPM = playerTeam === 'CT';
+  const created: HandArmMaterialSet = {
+    sleeveMat: new THREE.MeshStandardMaterial({
+      color: isPM ? 0x131822 : 0x991b1b,
+      roughness: 0.78,
+      metalness: 0.08,
+    }),
+    gloveMat: new THREE.MeshStandardMaterial({
+      color: isPM ? 0x0b0d11 : 0x3f2718,
+      roughness: 0.64,
+      metalness: 0.14,
+    }),
+    knuckleMat: new THREE.MeshStandardMaterial({
+      color: isPM ? 0x1e242d : 0x1c1917,
+      roughness: 0.42,
+      metalness: 0.35,
+    }),
+    skinMat: new THREE.MeshStandardMaterial({
+      color: 0xd49b6a,
+      roughness: 0.62,
+      metalness: 0.04,
+    }),
+  };
+
+  cachedHandArmMaterials[playerTeam] = created;
+  return created;
+}
+
+// Geometrias compartilhadas para mãos, dedos, punhos e clarão de disparo (Zero realocação em trocas de arma)
+interface SharedHandGeometries {
+  cuffGeo: THREE.CylinderGeometry;
+  rightPalmGeo: THREE.BoxGeometry;
+  rightKnuckleGeo: THREE.BoxGeometry;
+  indexKnifeGeo: THREE.BoxGeometry;
+  indexGunGeo: THREE.BoxGeometry;
+  fingerFrontGeo: THREE.BoxGeometry;
+  fingerWrapGeo: THREE.BoxGeometry;
+  rightThumbGeo: THREE.BoxGeometry;
+  leftPistolPalmGeo: THREE.BoxGeometry;
+  leftPistolKnuckleGeo: THREE.BoxGeometry;
+  leftPistolFingerGeo: THREE.BoxGeometry;
+  leftPistolThumbGeo: THREE.BoxGeometry;
+  underPalmGeo: THREE.BoxGeometry;
+  underKnuckleGeo: THREE.BoxGeometry;
+  sideFingerGeo: THREE.BoxGeometry;
+  cClampThumbGeo: THREE.BoxGeometry;
+  flashLightConeGeo: THREE.ConeGeometry;
+  flashHeavyConeGeo: THREE.ConeGeometry;
+  flashBasicMat: THREE.MeshBasicMaterial;
+}
+
+let cachedHandGeos: SharedHandGeometries | null = null;
+
+function getSharedHandGeometries(): SharedHandGeometries {
+  if (cachedHandGeos) return cachedHandGeos;
+  cachedHandGeos = {
+    cuffGeo: new THREE.CylinderGeometry(0.032, 0.031, 0.036, 10),
+    rightPalmGeo: new THREE.BoxGeometry(0.032, 0.062, 0.058),
+    rightKnuckleGeo: new THREE.BoxGeometry(0.035, 0.018, 0.048),
+    indexKnifeGeo: new THREE.BoxGeometry(0.014, 0.014, 0.042),
+    indexGunGeo: new THREE.BoxGeometry(0.014, 0.014, 0.052),
+    fingerFrontGeo: new THREE.BoxGeometry(0.034, 0.013, 0.022),
+    fingerWrapGeo: new THREE.BoxGeometry(0.014, 0.012, 0.028),
+    rightThumbGeo: new THREE.BoxGeometry(0.032, 0.015, 0.024),
+    leftPistolPalmGeo: new THREE.BoxGeometry(0.028, 0.058, 0.054),
+    leftPistolKnuckleGeo: new THREE.BoxGeometry(0.031, 0.016, 0.044),
+    leftPistolFingerGeo: new THREE.BoxGeometry(0.036, 0.012, 0.022),
+    leftPistolThumbGeo: new THREE.BoxGeometry(0.015, 0.015, 0.046),
+    underPalmGeo: new THREE.BoxGeometry(0.044, 0.020, 0.068),
+    underKnuckleGeo: new THREE.BoxGeometry(0.042, 0.014, 0.056),
+    sideFingerGeo: new THREE.BoxGeometry(0.014, 0.034, 0.013),
+    cClampThumbGeo: new THREE.BoxGeometry(0.015, 0.036, 0.022),
+    flashLightConeGeo: new THREE.ConeGeometry(0.068, 0.16, 6),
+    flashHeavyConeGeo: new THREE.ConeGeometry(0.095, 0.22, 6),
+    flashBasicMat: new THREE.MeshBasicMaterial({ color: 0xfde047 }),
+  };
+  return cachedHandGeos;
+}
 
 /**
  * Cria um segmento cilíndrico/chanfrado de antebraço conectado perfeitamente
@@ -102,17 +203,18 @@ function createConnectedForearmSegment(
   skinMat: THREE.Material,
   isPM: boolean
 ): THREE.Group {
+  const sharedGeos = getSharedHandGeometries();
   const armGroup = new THREE.Group();
-  const delta = new THREE.Vector3().subVectors(shoulderPos, wristPos);
-  const fullLen = Math.max(0.12, delta.length());
-  const dir = delta.clone().normalize();
-  const mid = new THREE.Vector3().addVectors(wristPos, shoulderPos).multiplyScalar(0.5);
+  _tmpDelta.subVectors(shoulderPos, wristPos);
+  const fullLen = Math.max(0.12, _tmpDelta.length());
+  _tmpDir.copy(_tmpDelta).divideScalar(fullLen);
+  _tmpMid.addVectors(wristPos, shoulderPos).multiplyScalar(0.5);
 
   // Manga / Antebraço afunilado (proporção anatômica natural: 2.9cm no pulso até 4.0cm no cotovelo)
   const forearmGeo = new THREE.CylinderGeometry(0.039, 0.029, fullLen, 10);
   const forearmMesh = new THREE.Mesh(forearmGeo, isPM ? sleeveMat : skinMat);
-  forearmMesh.position.copy(mid);
-  forearmMesh.quaternion.setFromUnitVectors(_upAxis, dir);
+  forearmMesh.position.copy(_tmpMid);
+  forearmMesh.quaternion.setFromUnitVectors(_upAxis, _tmpDir);
   armGroup.add(forearmMesh);
 
   // Nos Bandidos (TR), adiciona dobra de manga curta na metade superior do antebraço
@@ -124,18 +226,15 @@ function createConnectedForearmSegment(
       sleeveMat
     );
     upperSleeve.position.copy(upperPos);
-    upperSleeve.quaternion.setFromUnitVectors(_upAxis, dir);
+    upperSleeve.quaternion.setFromUnitVectors(_upAxis, _tmpDir);
     armGroup.add(upperSleeve);
   }
 
   // Punho tático / munhequeira exatamente na transição com a luva
   const cuffPos = new THREE.Vector3().lerpVectors(wristPos, shoulderPos, 0.08);
-  const wristCuff = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.032, 0.031, 0.036, 10),
-    cuffMat
-  );
+  const wristCuff = new THREE.Mesh(sharedGeos.cuffGeo, cuffMat);
   wristCuff.position.copy(cuffPos);
-  wristCuff.quaternion.setFromUnitVectors(_upAxis, dir);
+  wristCuff.quaternion.setFromUnitVectors(_upAxis, _tmpDir);
   armGroup.add(wristCuff);
 
   return armGroup;
@@ -154,28 +253,8 @@ function buildCalibratedHandsAndArmsRig(
   leftArmRig: THREE.Group | null;
 } {
   const isPM = playerTeam === 'CT';
-
-  const sleeveMat = new THREE.MeshStandardMaterial({
-    color: isPM ? 0x131822 : 0x991b1b,
-    roughness: 0.78,
-    metalness: 0.08,
-  });
-  const gloveMat = new THREE.MeshStandardMaterial({
-    color: isPM ? 0x0b0d11 : 0x3f2718,
-    roughness: 0.64,
-    metalness: 0.14,
-  });
-  const knuckleMat = new THREE.MeshStandardMaterial({
-    color: isPM ? 0x1e242d : 0x1c1917,
-    roughness: 0.42,
-    metalness: 0.35,
-  });
-  const skinMat = new THREE.MeshStandardMaterial({
-    color: 0xd49b6a,
-    roughness: 0.62,
-    metalness: 0.04,
-  });
-
+  const { sleeveMat, gloveMat, knuckleMat, skinMat } = getHandArmMaterialSet(playerTeam);
+  const sharedGeos = getSharedHandGeometries();
   const fingerTipMat = isPM ? gloveMat : skinMat;
 
   // ==========================================================================
@@ -199,22 +278,16 @@ function buildCalibratedHandsAndArmsRig(
   }
 
   // Palma direita encostada na lateral direita/traseira do punho da arma
-  const rightPalm = new THREE.Mesh(
-    new THREE.BoxGeometry(0.032, 0.062, 0.058),
-    gloveMat
-  );
+  const rightPalm = new THREE.Mesh(sharedGeos.rightPalmGeo, gloveMat);
   rightPalm.position.set(0.015, -0.004, 0.008);
 
   // Placa protetora dorsal (knuckle guard)
-  const rightKnuckle = new THREE.Mesh(
-    new THREE.BoxGeometry(0.035, 0.018, 0.048),
-    knuckleMat
-  );
+  const rightKnuckle = new THREE.Mesh(sharedGeos.rightKnuckleGeo, knuckleMat);
   rightKnuckle.position.set(0.017, 0.018, 0.004);
 
   // Dedo indicador estendido até o guarda-mato / gatilho (nas armas de fogo) ou envolvendo o cabo (na faca)
   const indexFinger = new THREE.Mesh(
-    new THREE.BoxGeometry(0.014, 0.014, isKnife ? 0.042 : 0.052),
+    isKnife ? sharedGeos.indexKnifeGeo : sharedGeos.indexGunGeo,
     fingerTipMat
   );
   if (isKnife) {
@@ -229,25 +302,16 @@ function buildCalibratedHandsAndArmsRig(
   // 3 dedos inferiores (médio, anelar e mínimo) curvados envolvendo a frente do punho
   for (let f = 0; f < 3; f++) {
     const yOff = 0.002 - f * 0.015;
-    const fingerFront = new THREE.Mesh(
-      new THREE.BoxGeometry(0.034, 0.013, 0.022),
-      fingerTipMat
-    );
+    const fingerFront = new THREE.Mesh(sharedGeos.fingerFrontGeo, fingerTipMat);
     fingerFront.position.set(-0.002, yOff, -0.024);
 
-    const fingerWrap = new THREE.Mesh(
-      new THREE.BoxGeometry(0.014, 0.012, 0.028),
-      fingerTipMat
-    );
+    const fingerWrap = new THREE.Mesh(sharedGeos.fingerWrapGeo, fingerTipMat);
     fingerWrap.position.set(-0.014, yOff, -0.012);
     rightHandGroup.add(fingerFront, fingerWrap);
   }
 
   // Polegar direito envolvendo a parte superior esquerda do punho (backstrap)
-  const rightThumb = new THREE.Mesh(
-    new THREE.BoxGeometry(0.032, 0.015, 0.024),
-    fingerTipMat
-  );
+  const rightThumb = new THREE.Mesh(sharedGeos.rightThumbGeo, fingerTipMat);
   rightThumb.position.set(-0.004, 0.026, 0.012);
   rightThumb.rotation.z = 0.28;
 
@@ -292,34 +356,22 @@ function buildCalibratedHandsAndArmsRig(
     // Mão esquerda envolve a lateral esquerda e a frente dos dedos da mão direita (postura thumbs-forward)
     leftHandGroup.rotation.set(-0.22, -0.18, 0.08);
 
-    const leftPalm = new THREE.Mesh(
-      new THREE.BoxGeometry(0.028, 0.058, 0.054),
-      gloveMat
-    );
+    const leftPalm = new THREE.Mesh(sharedGeos.leftPistolPalmGeo, gloveMat);
     leftPalm.position.set(-0.018, -0.004, 0.006);
 
-    const leftKnuckle = new THREE.Mesh(
-      new THREE.BoxGeometry(0.031, 0.016, 0.044),
-      knuckleMat
-    );
+    const leftKnuckle = new THREE.Mesh(sharedGeos.leftPistolKnuckleGeo, knuckleMat);
     leftKnuckle.position.set(-0.020, 0.016, 0.002);
 
     // 4 dedos da mão esquerda sobrepostos na frente do punho sem deixar vãos
     for (let f = 0; f < 4; f++) {
       const yOff = 0.014 - f * 0.0135;
-      const supportFinger = new THREE.Mesh(
-        new THREE.BoxGeometry(0.036, 0.012, 0.022),
-        fingerTipMat
-      );
+      const supportFinger = new THREE.Mesh(sharedGeos.leftPistolFingerGeo, fingerTipMat);
       supportFinger.position.set(-0.002, yOff, -0.024);
       leftHandGroup.add(supportFinger);
     }
 
     // Polegar esquerdo apontado à frente ao longo do chassi (frame) da pistola
-    const leftThumb = new THREE.Mesh(
-      new THREE.BoxGeometry(0.015, 0.015, 0.046),
-      fingerTipMat
-    );
+    const leftThumb = new THREE.Mesh(sharedGeos.leftPistolThumbGeo, fingerTipMat);
     leftThumb.position.set(-0.016, 0.026, -0.018);
     leftThumb.rotation.x = 0.14;
 
@@ -331,35 +383,23 @@ function buildCalibratedHandsAndArmsRig(
     leftHandGroup.rotation.set(0.06, -0.14, 0.12);
 
     // Palma inferior encaixada sob o guarda-mão (handguard / forend)
-    const underPalm = new THREE.Mesh(
-      new THREE.BoxGeometry(0.044, 0.020, 0.068),
-      gloveMat
-    );
+    const underPalm = new THREE.Mesh(sharedGeos.underPalmGeo, gloveMat);
     underPalm.position.set(0.0, -0.018, 0.0);
 
-    const underKnuckle = new THREE.Mesh(
-      new THREE.BoxGeometry(0.042, 0.014, 0.056),
-      knuckleMat
-    );
+    const underKnuckle = new THREE.Mesh(sharedGeos.underKnuckleGeo, knuckleMat);
     underKnuckle.position.set(-0.006, -0.024, 0.004);
 
     // 4 dedos curvados subindo pela lateral direita do guarda-mão
     for (let f = 0; f < 4; f++) {
       const zOff = -0.022 + f * 0.015;
-      const sideFinger = new THREE.Mesh(
-        new THREE.BoxGeometry(0.014, 0.034, 0.013),
-        fingerTipMat
-      );
+      const sideFinger = new THREE.Mesh(sharedGeos.sideFingerGeo, fingerTipMat);
       sideFinger.position.set(0.020, -0.002, zOff);
       sideFinger.rotation.z = 0.18;
       leftHandGroup.add(sideFinger);
     }
 
     // Polegar esquerdo envolvendo a lateral esquerda/superior do guarda-mão
-    const cClampThumb = new THREE.Mesh(
-      new THREE.BoxGeometry(0.015, 0.036, 0.022),
-      fingerTipMat
-    );
+    const cClampThumb = new THREE.Mesh(sharedGeos.cClampThumbGeo, fingerTipMat);
     cClampThumb.position.set(-0.020, 0.002, -0.006);
     cClampThumb.rotation.z = -0.24;
 
@@ -453,6 +493,7 @@ export function buildFirstPersonWeaponViewmodel(
   muzzleFlashMesh: THREE.Mesh | null;
 } {
   const pal = getWeaponPalette();
+  const sharedGeos = getSharedHandGeometries();
   const weaponGroup = new THREE.Group();
   weaponGroup.name = `FirstPersonViewmodel_${spec.id}`;
   weaponGroup.userData.isFirstPersonViewmodel = true;
@@ -491,8 +532,8 @@ export function buildFirstPersonWeaponViewmodel(
       spec.id === 'awp' ||
       spec.id.startsWith('sniper_');
     muzzleFlashMesh = new THREE.Mesh(
-      new THREE.ConeGeometry(isHeavyFlash ? 0.095 : 0.068, isHeavyFlash ? 0.22 : 0.16, 6),
-      new THREE.MeshBasicMaterial({ color: 0xfde047 })
+      isHeavyFlash ? sharedGeos.flashHeavyConeGeo : sharedGeos.flashLightConeGeo,
+      sharedGeos.flashBasicMat
     );
     muzzleFlashMesh.rotation.x = -Math.PI / 2;
     muzzleFlashMesh.position.set(...glbCfg.fpMuzzlePos);
@@ -505,3 +546,4 @@ export function buildFirstPersonWeaponViewmodel(
 
   return { weaponGroup, muzzleFlashMesh };
 }
+
